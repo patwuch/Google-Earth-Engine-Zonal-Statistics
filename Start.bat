@@ -34,9 +34,7 @@ if not defined APP_PORT (
 echo Selected port: %APP_PORT%
 
 :: --- Write APP_PORT to .env so docker compose reliably picks it up ---
-type .env | findstr /v "APP_PORT=" > .env.tmp
-echo APP_PORT=%APP_PORT%>> .env.tmp
-move /y .env.tmp .env >nul
+powershell -Command "$lines = (Get-Content '.env') -notmatch '^APP_PORT='; $lines + 'APP_PORT=%APP_PORT%' | Set-Content '.env'"
 
 :: --- Build and start ---
 echo Starting GEE Batch Processor on port %APP_PORT%...
