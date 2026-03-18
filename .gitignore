@@ -6,7 +6,6 @@ config/gee-key.json
 .env.*
 
 # --- Generated data (large, run-specific) ---
-data/uploads/
 data/runs/
 
 # --- Snakemake internals ---

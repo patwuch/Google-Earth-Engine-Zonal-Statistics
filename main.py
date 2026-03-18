@@ -26,7 +26,6 @@ import zipfile
 import shutil
 import tempfile
 import geopandas as gpd
-import pyarrow.parquet as pq
 
 # --- Session State ---
 if 'pipeline_running' not in st.session_state:
@@ -115,7 +114,6 @@ def read_gee_key_email() -> str | None:
 
 def _duckdb_connect(path: str, retries: int = 8, delay: float = 0.25):
     """Open a DuckDB write connection with retry on lock contention."""
-    import time as _time
     last_exc = None
     for attempt in range(retries):
         try:
@@ -124,7 +122,7 @@ def _duckdb_connect(path: str, retries: int = 8, delay: float = 0.25):
             if "lock" not in str(e).lower():
                 raise
             last_exc = e
-            _time.sleep(delay * (attempt + 1))
+            time.sleep(delay * (attempt + 1))
     raise last_exc
 
 
@@ -1107,7 +1105,6 @@ if resume_run_meta and resume_run_meta.get("status") in {"failed", "stopped"}:
         failed_resume_payload = payload_candidate
 
 # --- 1. Product Selection Sidebar ---
-# --- 1. Product Selection Sidebar (Restoring Stats, Bands, and Dates) ---
 st.sidebar.header("1. Data Parameters")
 product_configs = {}
 
@@ -1364,230 +1361,22 @@ def render_registered_run_context(run_id: str, run_meta: dict):
 
 
 
-def build_partial_checkout_files(run_id: str):
-    """Build merged partial checkout files (per product) from completed CSV chunks (legacy)."""
-    run_chunk_root = intermediate_dir(run_id) / "csv_chunks"
-    partial_root = results_dir(run_id) / "partial_checkout"
-    if not run_chunk_root.exists():
-        return []
-
-    merged_files = []
-    for product_dir in sorted([item for item in run_chunk_root.iterdir() if item.is_dir()]):
-        grouped_chunks = {}
-        for chunk_file in sorted(product_dir.glob("*.csv")):
-            match = re.match(r"^(?P<band>.+)_(?P<chunk>\d{4}(?:-\d{2})?)\.csv$", chunk_file.name)
-            if not match:
-                continue
-            band = match.group("band")
-            chunk = match.group("chunk")
-            grouped_chunks.setdefault(band, []).append((chunk, chunk_file))
-
-        if not grouped_chunks:
-            continue
-
-        all_chunks = sorted({chunk for chunk_items in grouped_chunks.values() for chunk, _ in chunk_items})
-        if not all_chunks:
-            continue
-
-        output_dir = partial_root / product_dir.name
-        output_dir.mkdir(parents=True, exist_ok=True)
-        first_chunk = all_chunks[0]
-        last_chunk = all_chunks[-1]
-        output_file = output_dir / f"{product_dir.name}_partial_{first_chunk}_to_{last_chunk}.csv"
-
-        latest_chunk_mtime = max(
-            file_path.stat().st_mtime
-            for chunk_items in grouped_chunks.values()
-            for _, file_path in chunk_items
-        )
-        if output_file.exists() and output_file.stat().st_mtime >= latest_chunk_mtime:
-            merged_files.append(output_file)
-            continue
-
-        band_frames = []
-        for _, chunk_items in sorted(grouped_chunks.items()):
-            chunk_items = sorted(chunk_items, key=lambda item: item[0])
-            frames = []
-            for _, file_path in chunk_items:
-                try:
-                    frames.append(pd.read_csv(file_path))
-                except Exception:
-                    continue
-            if frames:
-                band_frames.append(pd.concat(frames, ignore_index=True))
-
-        if not band_frames:
-            continue
-
-        key_candidates = ["Date", "Doy", "region_id"]
-        merge_keys = [
-            key for key in key_candidates
-            if all(key in df.columns for df in band_frames)
-        ]
-
-        if not merge_keys:
-            common_cols = set(band_frames[0].columns)
-            for df in band_frames[1:]:
-                common_cols &= set(df.columns)
-            merge_keys = sorted(common_cols)
-
-        if len(band_frames) == 1:
-            merged_df = band_frames[0]
-        elif merge_keys:
-            merged_df = band_frames[0]
-            for next_df in band_frames[1:]:
-                merged_df = merged_df.merge(next_df, on=merge_keys, how="outer")
-        else:
-            merged_df = pd.concat([df.reset_index(drop=True) for df in band_frames], axis=1)
-            merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
-
-        if "Date" in merged_df.columns:
-            merged_df["Date"] = pd.to_datetime(merged_df["Date"], errors="coerce")
-            sort_cols = [col for col in ["Date", "region_id"] if col in merged_df.columns]
-            if sort_cols:
-                merged_df = merged_df.sort_values(by=sort_cols)
-            merged_df["Date"] = merged_df["Date"].dt.strftime("%Y/%m/%d")
-
-        merged_df.to_csv(output_file, index=False)
-        merged_files.append(output_file)
-
-    return sorted(merged_files)
-
-def sql_quote_ident(identifier: str) -> str:
-    """Safely quote SQL identifiers for DuckDB."""
-    return '"' + str(identifier).replace('"', '""') + '"'
-
-def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
-    """Merge chunk parquet files into one parquet file using key-based joins when possible."""
-    if not chunk_files:
-        return False
-
-    conn = duckdb.connect(":memory:")
-    try:
-        conn.execute("CREATE TABLE chunk_0 AS SELECT * FROM read_parquet(?)", [str(chunk_files[0])])
-        first_cols = [row[1] for row in conn.execute("PRAGMA table_info('chunk_0')").fetchall()]
-
-        join_candidates = ["region_id", "Date", "geom", "geometry"]
-        fallback_union = False
-
-        for idx, chunk_path in enumerate(chunk_files[1:], start=1):
-            conn.execute(f"CREATE TABLE chunk_{idx} AS SELECT * FROM read_parquet(?)", [str(chunk_path)])
-            chunk_cols = [row[1] for row in conn.execute(f"PRAGMA table_info('chunk_{idx}')").fetchall()]
-
-            common_keys = [k for k in join_candidates if k in first_cols and k in chunk_cols]
-            if not common_keys:
-                fallback_union = True
-                break
-
-        if fallback_union:
-            union_query = " UNION ALL ".join(
-                [f"SELECT * FROM chunk_{idx}" for idx in range(len(chunk_files))]
-            )
-            conn.execute(f"CREATE TABLE merged AS {union_query}")
-        else:
-            select_items = [f"base.{sql_quote_ident(col)}" for col in first_cols]
-            join_clauses = []
-            seen_cols = set(first_cols)
-
-            for idx in range(1, len(chunk_files)):
-                chunk_cols = [row[1] for row in conn.execute(f"PRAGMA table_info('chunk_{idx}')").fetchall()]
-                common_keys = [k for k in join_candidates if k in seen_cols and k in chunk_cols]
-                new_cols = [c for c in chunk_cols if c not in seen_cols and c not in common_keys]
-
-                if not common_keys:
-                    continue
-
-                on_clause = " AND ".join(
-                    [f"base.{sql_quote_ident(k)} = c{idx}.{sql_quote_ident(k)}" for k in common_keys]
-                )
-                join_clauses.append(f"LEFT JOIN chunk_{idx} c{idx} ON {on_clause}")
-
-                for col in new_cols:
-                    select_items.append(f"c{idx}.{sql_quote_ident(col)}")
-                    seen_cols.add(col)
-
-            merge_query = (
-                "CREATE TABLE merged AS SELECT "
-                + ", ".join(select_items)
-                + " FROM chunk_0 base "
-                + " ".join(join_clauses)
-            )
-            conn.execute(merge_query)
-
-        sort_cols = []
-        merged_cols = [row[1] for row in conn.execute("PRAGMA table_info('merged')").fetchall()]
-        if "Date" in merged_cols:
-            sort_cols.append(sql_quote_ident("Date"))
-        if "region_id" in merged_cols:
-            sort_cols.append(sql_quote_ident("region_id"))
-
-        if sort_cols:
-            conn.execute(f"CREATE TABLE sorted AS SELECT * FROM merged ORDER BY {', '.join(sort_cols)}")
-            table_to_export = "sorted"
-        else:
-            table_to_export = "merged"
-
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        conn.execute(
-            f"COPY {table_to_export} TO ? (FORMAT PARQUET, COMPRESSION ZSTD)",
-            [str(output_file)]
-        )
-        return output_file.exists()
-    finally:
-        conn.close()
-
 def parquet_to_csv_bytes(parquet_path: Path) -> bytes:
     """Convert a GeoParquet file to a CSV with geometry removed.
 
-    Preserves wide format: one row per region per date, band/stat columns retained.
+    Persists the CSV next to the source parquet on first conversion so users
+    can access it directly from the filesystem. Returns the CSV bytes.
     """
+    csv_path = parquet_path.with_suffix(".csv")
+    if csv_path.exists():
+        return csv_path.read_bytes()
     gdf = gpd.read_parquet(parquet_path)
     drop_cols = [gdf.geometry.name] if gdf.geometry is not None else []
     df = pd.DataFrame(gdf).drop(columns=drop_cols, errors="ignore")
-    return df.to_csv(index=False).encode("utf-8")
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    csv_path.write_bytes(csv_bytes)
+    return csv_bytes
 
-
-def build_partial_checkout_files_parquet(run_id: str):
-    """Build merged partial checkout GeoParquet files from completed parquet chunks."""
-    run_chunk_root = intermediate_dir(run_id) / "chunks"
-    partial_root = results_dir(run_id) / "partial_checkout"
-    if not run_chunk_root.exists():
-        return []
-
-    merged_files = []
-    for product_dir in sorted([item for item in run_chunk_root.iterdir() if item.is_dir()]):
-        band_chunk_files = []
-        discovered_chunks = []
-
-        for chunk_file in sorted(product_dir.glob("*.parquet")):
-            match = re.match(
-            r"^(?P<band>.+?)_(?P<chunk>\d{4}-\d{2}_\d{4}-\d{2}|\d{4}-\d{2}|\d{4})\.parquet$",
-            chunk_file.name,
-        )
-            if not match:
-                continue
-            discovered_chunks.append(match.group("chunk"))
-            band_chunk_files.append(chunk_file)
-
-        if not band_chunk_files or not discovered_chunks:
-            continue
-
-        unique_chunks = sorted(set(discovered_chunks))
-        output_dir = partial_root / product_dir.name
-        output_file = output_dir / (
-            f"{product_dir.name}_partial_{unique_chunks[0]}_to_{unique_chunks[-1]}.parquet"
-        )
-
-        latest_chunk_mtime = max(chunk.stat().st_mtime for chunk in band_chunk_files)
-        if output_file.exists() and output_file.stat().st_mtime >= latest_chunk_mtime:
-            merged_files.append(output_file)
-            continue
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-        if merge_parquet_chunks_to_output(band_chunk_files, output_file):
-            merged_files.append(output_file)
-
-    return sorted(merged_files)
 
 def run_pipeline(config_path, payload, run_id):
     # Show execution plan from payload without blocking subprocess calls.

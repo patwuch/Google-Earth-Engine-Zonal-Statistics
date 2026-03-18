@@ -27,7 +27,7 @@ A small file (ending in `.json`) that gives the app access to Google Earth Engin
 
    > **Mac — first launch only:** if you see "cannot be opened because the developer cannot be verified", right-click `Start.command`, choose **Open**, then click **Open**. You won't be asked again.
 
-   The first time you launch it will take a few minutes to set up. You could take this time to read the USER_MANUAL.md, which has more detailed technical information about the app. When it is ready, your browser will open automatically.
+   The first time you launch it will take a few minutes to set up. You could take this time to read the [User Manual](USER_MANUAL.md), which has more detailed technical information about the app. When it is ready, your browser will open automatically.
 
 3. The app opens in your browser. While it is downloading, you can safely close the browser tab and the download will continue in the background.
 
@@ -39,7 +39,7 @@ A small file (ending in `.json`) that gives the app access to Google Earth Engin
 - **Windows:** double-click `Stop.bat`
 - **Linux:** run `./stop.sh` in a terminal
 
-Closing the browser tab does not stop the app — you need to use the stop file.
+Closing the browser tab does not stop the app — you need to use the stop file. 
 
 ---
 
@@ -51,6 +51,4 @@ Closing the browser tab does not stop the app — you need to use the stop file.
 
 The first time you open the app it will ask you to upload this file. After that it remembers it and you will not be asked again.
 
----
 
-For a full guide on using the app, see the [User Manual](USER_MANUAL.md).

@@ -1,139 +1,28 @@
 # GEE Batch Processor — User Manual
 
-A practical guide from cloning the repository to downloading your results.
+A practical guide to using the app, with setup and troubleshooting for when things go wrong.
 
 ---
 
 ## Table of Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Getting the code](#2-getting-the-code)
-3. [GEE credentials](#3-gee-credentials)
-4. [Building and launching Docker](#4-building-and-launching-docker)
-5. [Using the downloader (Streamlit UI)](#5-using-the-downloader-streamlit-ui)
+1. [Using the downloader (Streamlit UI)](#1-using-the-downloader-streamlit-ui)
    - [Section 0 — Run Session (sidebar)](#section-0--run-session-sidebar)
    - [Section 1 — Data Parameters (sidebar)](#section-1--data-parameters-sidebar)
    - [Section 2 — Area of Interest](#section-2--area-of-interest)
    - [Section 3 — Results](#section-3--results)
    - [Section 4 — Partial Checkout](#section-4--partial-checkout)
+2. [Prerequisites](#2-prerequisites)
+3. [Getting the code](#3-getting-the-code)
+4. [GEE credentials](#4-gee-credentials)
+5. [Building and launching Docker](#5-building-and-launching-docker)
 6. [Stopping, resuming, and housekeeping](#6-stopping-resuming-and-housekeeping)
 7. [Troubleshooting](#7-troubleshooting)
 8. [For developers](#8-for-developers)
 
 ---
 
-## 1. Prerequisites
-
-| Requirement | Minimum version | Notes |
-|-------------|-----------------|-------|
-| Docker Engine | 24+ | Includes `docker compose` plugin |
-| Docker Compose | v2 | Called as `docker compose` (no hyphen) |
-| Disk space | ~5 GB free | Per run; varies with AOI size and date range |
-| GEE service account | — | JSON key file; see §3 |
-
-On **macOS/Windows** use Docker Desktop. On **Linux** install Docker Engine and the Compose plugin from the official packages.
-
-Verify your install:
-
-```bash
-docker --version        # Docker version 24.x or later
-docker compose version  # Docker Compose version v2.x or later
-```
-
----
-
-## 2. Getting the code
-
-Clone the repository and enter the directory:
-
-```bash
-git clone https://github.com/<your-org>/gee_web_app.git
-cd gee_web_app
-```
-
-If you received the code as a ZIP archive instead, unzip it and `cd` into the resulting folder. The rest of the steps are identical.
-
-Make the launcher script executable:
-
-```bash
-chmod +x quickstart.sh
-```
-
-**What you'll see inside the folder:**
-
-```
-gee_web_app/
-├── main.py               ← Streamlit application (UI + pipeline launcher)
-├── Snakefile_parquet     ← Snakemake workflow (GeoParquet pipeline)
-├── scripts/              ← Worker scripts called by Snakemake
-├── config/               ← Key stored here after first-run setup (see §3)
-├── data/                 ← Created automatically; holds all run data
-├── Start.command         ← Launcher for macOS (double-click)
-├── Start.bat             ← Launcher for Windows (double-click)
-├── Stop.command          ← Stop the app on macOS (double-click)
-├── Stop.bat              ← Stop the app on Windows (double-click)
-├── docker-compose.yml
-├── Dockerfile
-└── requirements.txt
-```
-
----
-
-## 3. GEE credentials
-
-The app connects to Google Earth Engine using a **service account key**. You set this up entirely inside the browser — no manual file copying required.
-
-**Getting a key from Google Cloud:**
-
-1. Open the [Google Cloud Console](https://console.cloud.google.com/iam-admin/serviceaccounts) and select your project.
-2. Create (or open) a service account that has the **Earth Engine** role.
-3. Go to **Keys → Add Key → Create new key → JSON** and download the file.
-
-**Uploading the key in the app:**
-
-The first time you open `http://localhost:8501`, the app shows a setup screen instead of the normal UI. Drag-and-drop (or click to browse) the downloaded `.json` file into the upload widget. The app validates it and confirms the service-account email — then loads the full interface automatically.
-
-The key is saved to `config/gee-key.json` on the host and reused on every subsequent restart. You will not be prompted again unless you remove it.
-
-**Removing or replacing the key:**
-
-Open the **GEE credentials** expander in the left sidebar and click **Remove / replace key**. The setup screen reappears so you can upload a different key.
-
-> `config/gee-key.json` is listed in `.gitignore` and will not be committed to git.
-
----
-
-## 4. Building and launching Docker
-
-**macOS** — double-click `Start.command` in Finder.
-
-**Windows** — double-click `Start.bat`.
-
-**Linux** — run `./quickstart.sh` from a terminal inside the project folder.
-
-All three do the same thing:
-
-1. Check that Docker Desktop is running and show a clear message if it isn't.
-2. Build the image on first launch (downloads base image and installs dependencies — **takes 3–10 minutes the first time**, cached for every launch after).
-3. Start the container, pick the first free port from 8501–8505, wait for the UI to respond, then open it in your browser automatically.
-
-> **macOS — first launch only:** If you see "cannot be opened because the developer cannot be verified", right-click `Start.command` and choose **Open**, then click **Open** in the dialog. You won't be asked again.
-
-**To stop the app** when you are done:
-
-- **macOS:** double-click `Stop.command`
-- **Windows:** double-click `Stop.bat`
-- **Linux:** run `./stop.sh` in a terminal
-
-**To follow live logs:**
-
-```bash
-docker compose logs -f app
-```
-
----
-
-## 5. Using the downloader (Streamlit UI)
+## 1. Using the downloader (Streamlit UI)
 
 The UI is divided into numbered sections. Work through them top-to-bottom for a new run.
 
@@ -208,7 +97,7 @@ Once at least one dataset is configured and the AOI is uploaded, the **Run Analy
 1. Freeze the run configuration.
 2. Auto-generate or reuse the RUN ID.
 3. Show an **Execution Plan** with job counts.
-4. Launch Snakemake in the background.
+4. Launch the extraction pipeline in the background.
 
 Progress is shown below as chunk and final-file counts update. You can safely navigate away and come back — the pipeline runs in the background inside the container.
 
@@ -218,14 +107,10 @@ Progress is shown below as chunk and final-file counts update. You can safely na
 
 Located in the right main column, labelled **3. Results**.
 
-| Field | Purpose |
-|-------|---------|
-| **Results RUN ID** (text box) | Filter downloads to one specific run. Leave blank to show all runs. |
+Once a run has completed, result files appear in the UI with two options:
 
-When results are available, download buttons appear for each output file:
-
-- **GeoParquet (recommended)** — column-compressed, geometry-preserving, cloud-native format. One file per product per run.
-- **Legacy CSV** — flat table without geometry.
+- **GeoParquet (recommended)** — written to `data/runs/<run_id>/results/` automatically when the pipeline finishes. The file is already on your computer; the UI button is just a convenience shortcut.
+- **CSV** — clicking the CSV button converts the GeoParquet to a flat table (geometry removed) and saves it next to the parquet as `<product>_<start>_to_<end>.csv`. Subsequent clicks read from that saved file. Like the parquet, it is directly accessible in `data/runs/<run_id>/results/`.
 
 File naming convention:
 
@@ -233,8 +118,6 @@ File naming convention:
 <product>_<start_date>_to_<end_date>.parquet
 # e.g. CHIRPS_1986-01-01_to_2026-02-28.parquet
 ```
-
-Click the download button to save the file to your machine.
 
 ---
 
@@ -250,6 +133,111 @@ Re-click the button at any time to include newer completed chunks.
 
 ---
 
+## 2. Prerequisites
+
+| Requirement | Minimum version | Notes |
+|-------------|-----------------|-------|
+| Docker Engine | 24+ | Includes `docker compose` plugin |
+| Docker Compose | v2 | Called as `docker compose` (no hyphen) |
+| Disk space | ~5 GB free | Per run; varies with AOI size and date range |
+| GEE service account | — | JSON key file; see §4 |
+
+On **macOS/Windows** use Docker Desktop. On **Linux** install Docker Engine and the Compose plugin from the official packages.
+
+Verify your install:
+
+```bash
+docker --version        # Docker version 24.x or later
+docker compose version  # Docker Compose version v2.x or later
+```
+
+---
+
+## 3. Getting the code
+
+Clone the repository and enter the directory:
+
+```bash
+git clone https://github.com/<your-org>/gee_web_app.git
+cd gee_web_app
+```
+
+If you received the code as a ZIP archive instead, unzip it and `cd` into the resulting folder. The rest of the steps are identical.
+
+**What you'll see inside the folder:**
+
+```
+gee_web_app/
+├── main.py               ← Streamlit application (UI + pipeline launcher)
+├── Snakefile_parquet     ← Snakemake workflow (GeoParquet pipeline)
+├── scripts/              ← Worker scripts called by Snakemake
+├── config/               ← Key stored here after first-run setup (see §4)
+├── data/                 ← Created automatically; holds all run data
+├── Start.command         ← Launcher for macOS (double-click)
+├── Start.bat             ← Launcher for Windows (double-click)
+├── Stop.command          ← Stop the app on macOS (double-click)
+├── Stop.bat              ← Stop the app on Windows (double-click)
+├── docker-compose.yml
+├── Dockerfile
+└── requirements.txt
+```
+
+---
+
+## 4. GEE credentials
+
+The app connects to Google Earth Engine using a **service account key**. You set this up entirely inside the browser — no manual file copying required.
+
+**Getting a key from Google Cloud:**
+
+1. Open the [Google Cloud Console](https://console.cloud.google.com/iam-admin/serviceaccounts) and select your project.
+2. Create (or open) a service account that has the **Earth Engine** role.
+3. Go to **Keys → Add Key → Create new key → JSON** and download the file.
+
+**Uploading the key in the app:**
+
+The first time you open the app, it shows a setup screen instead of the normal UI. Drag-and-drop (or click to browse) the downloaded `.json` file into the upload widget. The app validates it and confirms the service-account email — then loads the full interface automatically.
+
+The key is saved to `config/gee-key.json` on the host and reused on every subsequent restart. You will not be prompted again unless you remove it.
+
+**Removing or replacing the key:**
+
+Open the **GEE credentials** expander in the left sidebar and click **Remove / replace key**. The setup screen reappears so you can upload a different key.
+
+> `config/gee-key.json` is listed in `.gitignore` and will not be committed to git.
+
+---
+
+## 5. Building and launching Docker
+
+**macOS** — double-click `Start.command` in Finder.
+
+**Windows** — double-click `Start.bat`.
+
+**Linux** — run `./quickstart.sh` from a terminal inside the project folder.
+
+All three do the same thing:
+
+1. Check that Docker Desktop is running and show a clear message if it isn't.
+2. Build the image on first launch (downloads base image and installs dependencies — **takes 3–10 minutes the first time**, cached for every launch after).
+3. Start the container, pick the first free port from 8501–8505, wait for the UI to respond, then open it in your browser automatically.
+
+> **macOS — first launch only:** If you see "cannot be opened because the developer cannot be verified", right-click `Start.command` and choose **Open**, then click **Open** in the dialog. You won't be asked again.
+
+**To stop the app** when you are done:
+
+- **macOS:** double-click `Stop.command`
+- **Windows:** double-click `Stop.bat`
+- **Linux:** run `./stop.sh` in a terminal
+
+**To follow live logs:**
+
+```bash
+docker compose logs -f app
+```
+
+---
+
 ## 6. Stopping, resuming, and housekeeping
 
 ### Stopping a running pipeline
@@ -262,7 +250,7 @@ Re-click the button at any time to include newer completed chunks.
 
 1. Enter the RUN ID in the Section 0 sidebar input.
 2. Configure the same products and date range.
-3. Click **Run Analysis** — the stored geometry is reused automatically and Snakemake picks up from where it left off (only missing chunks are re-extracted).
+3. Click **Run Analysis** — the stored geometry is reused automatically and the pipeline picks up from where it left off (only missing chunks are re-extracted).
 
 ### Unlocking a stale Snakemake lock
 
@@ -278,7 +266,8 @@ docker compose exec app bash -c "cd /app/data/runs/<run_id> && snakemake --unloc
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| UI never loads after `quickstart.sh` | Port 8501 blocked or image build failed | `docker compose logs -f app` to inspect |
+| App doesn't open after double-clicking the launcher | Docker is not running | Start Docker Desktop, then try again |
+| UI never loads (browser stays blank) | Port conflict or image build failed | `docker compose logs -f app` to inspect |
 | "GEE authentication error" | `gee-key.json` missing or wrong path | Confirm file is at `config/gee-key.json` |
 | Pipeline hangs at 0 chunks | GEE rate limit or network issue | Wait 2 min; check `data/runs/<run_id>/logs/snakemake_run.log` |
 | Run shows `failed` immediately | Snakemake lock from a prior crash | Run the unlock command above, then retry |
@@ -313,8 +302,12 @@ gee_web_app/
 ├── scripts/           # worker scripts called by Snakemake
 ├── main.py            # Streamlit application (UI + pipeline launcher)
 ├── Snakefile_parquet  # Snakemake workflow orchestrator
-├── quickstart.sh      # builds + launches Docker; picks a free port (8501–8505)
-├── stop.sh            # stops the running container
+├── quickstart.sh      # Linux launcher; picks a free port (8501–8505)
+├── stop.sh            # Linux stop script
+├── Start.command      # macOS launcher (double-click)
+├── Start.bat          # Windows launcher (double-click)
+├── Stop.command       # macOS stop (double-click)
+├── Stop.bat           # Windows stop (double-click)
 ├── docker-compose.yml # service definition
 ├── Dockerfile         # base image, system deps, pip install
 └── requirements.txt
@@ -334,7 +327,7 @@ docker compose exec app bash
 
 ### Port selection
 
-`quickstart.sh` tries ports 8501–8505 and uses the first one that is free. To change the candidate list, edit the `PORTS` array at the top of `quickstart.sh`.
+The launchers try ports 8501–8505 and use the first one that is free. To change the candidate list, edit the `PORTS` array at the top of `quickstart.sh` or `Start.command` / `Start.bat`.
 
 ### File ownership on Linux
 
@@ -344,5 +337,3 @@ docker compose exec app bash
 export HOST_UID=$(id -u) HOST_GID=$(id -g)
 docker compose up -d app
 ```
-
-
