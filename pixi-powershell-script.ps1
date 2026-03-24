@@ -78,6 +78,29 @@ Write-Host "  App port : $PORT"
 Write-Host ""
 
 # --- Build frontend ---
+$frontendPath = Join-Path $PSScriptRoot "frontend"
+$packageJson  = Join-Path $frontendPath "package.json"
+$nodeModules  = Join-Path $frontendPath "node_modules"
+$lockFile     = Join-Path $frontendPath "package-lock.json"
+
+# Only reinstall if node_modules is missing or package.json is newer than it
+$needsInstall = (-not (Test-Path $nodeModules)) -or
+                ((Get-Item $packageJson).LastWriteTime -gt (Get-Item $nodeModules).LastWriteTime)
+
+if ($needsInstall) {
+    Write-Host "  Dependencies outdated or missing - reinstalling..."
+    if (Test-Path $nodeModules) { Remove-Item -Recurse -Force $nodeModules }
+    if (Test-Path $lockFile)    { Remove-Item -Force $lockFile }
+
+    & pixi run npm-install-frontend
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  Frontend dependency install failed."
+        exit 1
+    }
+} else {
+    Write-Host "  Frontend dependencies up to date, skipping install."
+}
+
 Write-Host "  Building frontend..."
 & pixi run build-frontend
 if ($LASTEXITCODE -ne 0) {
@@ -94,6 +117,7 @@ Start-Process cmd `
     -WindowStyle Hidden
 
 Set-Content -Path ".pixi.port" -Value $PORT
+
 # --- Wait for app to be ready ---
 Write-Host "  Waiting for app (this may take a few seconds)..."
 Write-Host ""

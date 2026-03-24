@@ -985,6 +985,25 @@ def trigger_partial(run_id: str):
     )
     return {"ok": True}
 
+def _sanitize_filename(filename: str) -> str:
+    name = Path(filename).name
+    if not name or name in {".", ".."}:
+        raise HTTPException(400, "Invalid filename")
+    return name
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, destination: Path):
+    dest_root = destination.resolve()
+    for member in zf.infolist():
+        member_path = Path(member.filename)
+        if member_path.is_absolute():
+            raise HTTPException(400, "Zip contains invalid entry paths")
+        target = (destination / member_path).resolve(strict=False)
+        if not target.is_relative_to(dest_root):
+            raise HTTPException(400, "Zip contains invalid entry paths")
+    zf.extractall(destination)
+
+
 # ─── Routes: AOI upload ───────────────────────────────────────────────────────
 
 @app.post("/api/runs/{run_id}/aoi")
@@ -995,7 +1014,7 @@ async def upload_aoi(run_id: str, file: UploadFile = File(...)):
     input_dir.mkdir(parents=True, exist_ok=True)
 
     content  = await file.read()
-    filename = file.filename or "aoi"
+    filename = _sanitize_filename(file.filename or "aoi")
     ext      = Path(filename).suffix.lower()
     dest     = input_dir / filename
     dest.write_bytes(content)
@@ -1012,7 +1031,7 @@ async def upload_aoi(run_id: str, file: UploadFile = File(...)):
                     raise HTTPException(400, "No .shp found in zip")
                 # Also extract into input_dir for persistence
                 with zipfile.ZipFile(dest) as zf:
-                    zf.extractall(input_dir)
+                    _safe_extract_zip(zf, input_dir)
                 gdf = gpd.read_file(shp_files[0])
         elif ext in (".geojson", ".json"):
             gdf = gpd.read_file(io.BytesIO(content))

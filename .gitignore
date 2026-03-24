@@ -8,8 +8,9 @@ config/gee-key.json
 # --- Generated data (large, run-specific) ---
 data/runs/
 
-# --- Snakemake internals ---
-.snakemake/
+
+# --- Node / frontend ---
+frontend/node_modules/
 
 # --- Pixi ---
 .pixi/
