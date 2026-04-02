@@ -2,9 +2,24 @@
 
 A browser-based tool for downloading satellite data (precipitation, temperature, vegetation, land cover, and more) from Google Earth Engine for any area you choose.
 
+## Getting the app
+
+If you are on this GitHub page, click the green **Code** button near the top right, then select **Download ZIP**. Once downloaded, extract the ZIP to a folder you are happy with — then follow the instructions below.
+
 ---
 
-## Before you start
+
+# GEE Web App（繁體中文說明）
+
+簡單從 Google Earth Engine 下載您所選區域的衛星資料（降水量、氣溫、植被、土地覆蓋等）。
+
+## 取得應用程式
+
+若您正在瀏覽此 GitHub 頁面，請點擊右上角的綠色 **Code** 按鈕，選擇 **Download ZIP**。下載完成後，將 ZIP 解壓縮至您想要的資料夾——然後按照以下說明操作即可。
+
+---
+
+## What do I need?
 
 You need two things:
 
@@ -62,13 +77,7 @@ The first time you open the app it will ask you to upload this file. After that 
 
 ---
 
-# GEE Web App（繁體中文說明）
-
-簡單從 Google Earth Engine 下載您所選區域的衛星資料（降水量、氣溫、植被、土地覆蓋等）。
-
----
-
-## 開始之前
+## 壓縮檔下載好了嗎?
 
 您需要準備兩樣東西：
 
