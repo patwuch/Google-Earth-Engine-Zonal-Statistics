@@ -79,7 +79,7 @@ The first time you open the app it will ask you to upload this file. After that 
 
 ## 壓縮檔下載好了嗎?
 
-您需要準備兩樣東西：
+您需要確認兩樣東西：
 
 **1. 執行應用程式的方式——請選擇其一：**
 
