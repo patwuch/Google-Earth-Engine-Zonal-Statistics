@@ -10,12 +10,14 @@ You need two things:
 
 **1. A way to run the app — choose one:**
 
-| Option | Best for | Requirement |
-|--------|----------|-------------|
-| **Docker** | Complete environment isolation — nothing is installed on your machine | Install [Docker Desktop](https://www.docker.com/products/docker-desktop) |
-| **Pixi** | Environments where Docker is blocked or unavailable (e.g. managed corporate machines) | Installed automatically if missing (see below) |
+| Option | Best for | Requirement | Windows | Linux |
+|--------|----------|-------------|---------|-------|
+| **Docker** | Complete environment isolation — nothing is installed on your machine | Install [Docker Desktop](https://www.docker.com/products/docker-desktop) | Not yet available | Supported |
+| **Pixi** | Environments where Docker is blocked or unavailable (e.g. managed corporate machines) | Installed automatically if missing (see below) | Supported | Supported |
 
 Both options give the same app in your browser. Docker runs everything in isolated containers so nothing touches your system; Pixi installs the app's dependencies directly on your machine without containers.
+
+> **Docker on Windows:** Docker support is not yet available on Windows. Windows users should use the Pixi option.
 
 > **Pixi installation:** if Pixi is not already installed, the start script will detect this and offer to install it automatically on both Windows and Linux. No manual steps needed.
 
@@ -26,19 +28,20 @@ A small file (ending in `.json`) that gives the app access to Google Earth Engin
 
 ## Starting the app
 
-**Docker option:**
+**Docker option (Linux only):**
 
-| Platform | Action |
-|----------|--------|
-| Windows | Double-click `Start-docker.bat` |
-| Linux | Open a terminal in the folder and run `./Start-docker.sh` |
+Open a terminal in the folder and run:
+
+```
+./docker.sh start
+```
 
 **Pixi option:**
 
 | Platform | Action |
 |----------|--------|
-| Windows | Double-click `Start-pixi.bat` |
-| Linux | Open a terminal in the folder and run `./Start-pixi.sh` |
+| Windows | Double-click `pixi.bat` and choose **start** |
+| Linux | Open a terminal in the folder and run `./pixi.sh start` |
 
 The first launch takes a few minutes to set up. You can use this time to read the [User Manual](USER_MANUAL.md). When it is ready, your browser will open automatically.
 
@@ -46,19 +49,18 @@ The first launch takes a few minutes to set up. You can use this time to read th
 
 ## Stopping the app
 
-**Docker option:**
+**Docker option (Linux only):**
 
-| Platform | Action |
-|----------|--------|
-| Windows | Double-click `Stop-docker.bat` |
-| Linux | Run `./Stop-docker.sh` in a terminal |
+```
+./docker.sh stop
+```
 
 **Pixi option:**
 
 | Platform | Action |
 |----------|--------|
-| Windows | Double-click `Stop-pixi.bat` |
-| Linux | Run `./Stop-pixi.sh` in a terminal |
+| Windows | Double-click `pixi.bat` and choose **stop** |
+| Linux | Run `./pixi.sh stop` in a terminal |
 
 Closing the browser tab does **not** stop the app — any running download will continue in the background until you use the stop file.
 
@@ -86,12 +88,14 @@ The first time you open the app it will ask you to upload this file. After that 
 
 **1. 執行應用程式的方式——請選擇其一：**
 
-| 選項 | 適合對象 | 需求 |
-|------|----------|------|
-| **Docker** | 需要完整環境隔離——不在本機安裝任何東西 | 安裝 [Docker Desktop](https://www.docker.com/products/docker-desktop) |
-| **Pixi** | Docker 受限或無法使用的環境（例如企業管理電腦） | 若尚未安裝，啟動腳本會自動處理（見下方說明） |
+| 選項 | 適合對象 | 需求 | Windows | Linux |
+|------|----------|------|---------|-------|
+| **Docker** | 需要完整環境隔離——不在本機安裝任何東西 | 安裝 [Docker Desktop](https://www.docker.com/products/docker-desktop) | 尚未支援 | 支援 |
+| **Pixi** | Docker 受限或無法使用的環境（例如企業管理電腦） | 若尚未安裝，啟動腳本會自動處理（見下方說明） | 支援 | 支援 |
 
 兩種選項都會在瀏覽器中呈現相同的應用程式。Docker 使用隔離容器執行，不影響系統；Pixi 則直接在您的電腦上安裝依賴套件，不需要容器。
+
+> **Windows 上的 Docker：** Docker 目前尚未支援 Windows。Windows 使用者請使用 Pixi 選項。
 
 > **Pixi 安裝說明：** 若尚未安裝 Pixi，啟動腳本在 Windows 與 Linux 上都會自動偵測並提示您安裝，無需手動操作。
 
@@ -102,19 +106,20 @@ The first time you open the app it will ask you to upload this file. After that 
 
 ## 啟動應用程式
 
-**Docker 選項：**
+**Docker 選項（僅限 Linux）：**
 
-| 平台 | 操作方式 |
-|------|----------|
-| Windows | 雙擊 `Start-docker.bat` |
-| Linux | 在資料夾中開啟終端機並執行 `./Start-docker.sh` |
+在資料夾中開啟終端機並執行：
+
+```
+./docker.sh start
+```
 
 **Pixi 選項：**
 
 | 平台 | 操作方式 |
 |------|----------|
-| Windows | 雙擊 `Start-pixi.bat` |
-| Linux | 在資料夾中開啟終端機並執行 `./Start-pixi.sh` |
+| Windows | 雙擊 `pixi.bat`，選擇 **start** |
+| Linux | 在資料夾中開啟終端機並執行 `./pixi.sh start` |
 
 首次啟動需要幾分鐘進行初始化。您可以利用這段時間閱讀[使用手冊](USER_MANUAL.md)。準備就緒後，瀏覽器將自動開啟。
 
@@ -122,19 +127,18 @@ The first time you open the app it will ask you to upload this file. After that 
 
 ## 停止應用程式
 
-**Docker 選項：**
+**Docker 選項（僅限 Linux）：**
 
-| 平台 | 操作方式 |
-|------|----------|
-| Windows | 雙擊 `Stop-docker.bat` |
-| Linux | 在終端機中執行 `./Stop-docker.sh` |
+```
+./docker.sh stop
+```
 
 **Pixi 選項：**
 
 | 平台 | 操作方式 |
 |------|----------|
-| Windows | 雙擊 `Stop-pixi.bat` |
-| Linux | 在終端機中執行 `./Stop-pixi.sh` |
+| Windows | 雙擊 `pixi.bat`，選擇 **stop** |
+| Linux | 在終端機中執行 `./pixi.sh stop` |
 
 關閉瀏覽器分頁不會停止應用程式——任何正在進行的下載都會在背景繼續，直到您使用對應的停止檔案為止。
 
