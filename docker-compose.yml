@@ -1,0 +1,54 @@
+services:
+
+  # ── FastAPI backend ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: gee_backend
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/gee-key.json
+      - HOME=/tmp
+      - PYTHONWARNINGS=ignore::FutureWarning
+    restart: unless-stopped
+
+  # ── React frontend (dev) ─────────────────────────────────────────────────────
+  frontend-dev:
+    image: node:20-alpine
+    container_name: gee_frontend_dev
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE=/api
+    command: ["sh", "-c", "npm install --no-package-lock && npm run dev"]
+    depends_on:
+      - backend
+    profiles:
+      - dev
+
+  # ── React frontend (production build served by nginx) ─────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: gee_frontend
+    ports:
+      - "${APP_PORT:-3000}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    profiles:
+      - prod
+
+volumes:
+  frontend_node_modules:

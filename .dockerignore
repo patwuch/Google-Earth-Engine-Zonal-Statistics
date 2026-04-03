@@ -1,0 +1,45 @@
+# --- Credentials ---
+config/gee-key.json
+*.json
+!package.json
+.env
+.env.*
+
+# --- Generated data ---
+data/
+.tmp/
+
+# --- Node / frontend ---
+frontend/node_modules/
+frontend/dist/
+
+# --- Pixi ---
+.pixi/
+.pixi.pid
+.pixi.port
+pixi.log
+pixi.lock
+
+# --- Python ---
+__pycache__/
+**/__pycache__/
+*.pyc
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Git ---
+.git/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+.devcontainer/
+
+# --- Misc ---
+.pytest_cache/
+*.log
