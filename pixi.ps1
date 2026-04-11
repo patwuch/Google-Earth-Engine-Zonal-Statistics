@@ -38,11 +38,21 @@ function Stop-App {
     }
 
     # Kill any process still listening on the app port
-    $listeners = netstat -aon 2>$null | Select-String ":${PORT}\s+.*LISTENING"
-    foreach ($line in $listeners) {
-        $linePid = ($line -split '\s+')[-1]
-        Write-Host "  Killing port listener (PID $linePid)..."
-        taskkill /pid $linePid /f /t 2>$null | Out-Null
+    if (Get-Command netstat -ErrorAction SilentlyContinue) {
+        $listeners = netstat -aon 2>$null | Select-String ":${PORT}\s+.*LISTENING"
+        foreach ($line in $listeners) {
+            $linePid = ($line -split '\s+')[-1]
+            Write-Host "  Killing port listener (PID $linePid)..."
+            taskkill /pid $linePid /f /t 2>$null | Out-Null
+        }
+    } else {
+        $job = Start-Job { Get-NetTCPConnection -LocalPort $using:PORT -State Listen -ErrorAction SilentlyContinue }
+        $listeners = $job | Wait-Job -Timeout 5 | Receive-Job
+        Remove-Job $job -Force
+        foreach ($conn in $listeners) {
+            Write-Host "  Killing port listener (PID $($conn.OwningProcess))..."
+            taskkill /pid $conn.OwningProcess /f /t 2>$null | Out-Null
+        }
     }
 
     taskkill /im uvicorn.exe /f /t 2>$null | Out-Null
@@ -124,14 +134,27 @@ function Start-App {
     }
 
     # --- Find a free port ---
-    # Use netstat instead of Get-NetTCPConnection — the latter can hang indefinitely
-    # when the Windows network stack is in a degraded state (e.g. after a system crash).
     $PORT = $null
-    $netstatOutput = netstat -ano 2>$null
-    foreach ($p in 8000, 8001, 8002, 8003) {
-        $inUse = $netstatOutput | Select-String ":${p}\s"
-        if (-not $inUse) { $PORT = $p; break }
+    $netstatOutput = $null
+
+    # Try netstat first; fall back to Get-NetTCPConnection if unavailable
+    if (Get-Command netstat -ErrorAction SilentlyContinue) {
+        $netstatOutput = netstat -ano 2>$null
+        foreach ($p in 8000, 8001, 8002, 8003) {
+            $inUse = $netstatOutput | Select-String ":${p}\s"
+            if (-not $inUse) { $PORT = $p; break }
+        }
+    } else {
+        # Get-NetTCPConnection can hang on degraded network stacks,
+        # so run it with a timeout via a background job
+        foreach ($p in 8000, 8001, 8002, 8003) {
+            $job = Start-Job { Get-NetTCPConnection -LocalPort $using:p -ErrorAction SilentlyContinue }
+            $result = $job | Wait-Job -Timeout 5 | Receive-Job
+            Remove-Job $job -Force
+            if (-not $result) { $PORT = $p; break }
+        }
     }
+
     if (-not $PORT) {
         Write-Host "  No free port found (tried 8000-8003). Free a port and try again."
         exit 1
