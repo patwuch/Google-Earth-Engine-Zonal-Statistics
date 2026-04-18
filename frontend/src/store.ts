@@ -51,7 +51,7 @@ export const useAppStore = create<AppState>((set) => ({
       },
     })),
 
-  resetPending: () => set({ pendingRun: defaultPending() }),
+  resetPending: () => set({ pendingRun: defaultPending(), idColumn: null }),
 
   idColumn: null,
   setIdColumn: (col) => set({ idColumn: col }),

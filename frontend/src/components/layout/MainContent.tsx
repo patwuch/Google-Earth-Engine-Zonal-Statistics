@@ -45,6 +45,7 @@ export default function MainContent({ keyValid }: MainContentProps) {
       <section className="flex-1 flex flex-col border-r border-gray-200 overflow-y-auto p-4 gap-4">
         {/* Show AOI uploader for the pending run or the active run */}
         <AOIUpload
+          key={displayRunId ?? pendingRun.run_id ?? 'none'}
           runId={displayRunId ?? (pendingRun.run_id || null)}
           existingAoiName={existingAoiName}
         />

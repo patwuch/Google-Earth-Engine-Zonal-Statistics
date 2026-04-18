@@ -5,6 +5,10 @@ within the GEE payload budget, and writes to GeoParquet.
 
 Each chunk worker loads this file instead of the raw shapefile, so the
 coordinate-counting and simplification ladder runs exactly once per run.
+
+Simplification is performed in EPSG:6933 (equal-area, metres) so that the
+tolerance has a consistent physical meaning regardless of latitude, then
+reprojected back to EPSG:4326 for GEE upload.
 """
 import os
 from pathlib import Path
@@ -38,7 +42,17 @@ def _count_coords(geom):
 
 
 _COORD_BUDGET = 200_000
-_SIMPLIFY_LADDER = [0.001, 0.003, 0.01, 0.02, 0.05]
+
+# Simplification ladder in metres — aligns with common sensor resolutions.
+# 10m: Sentinel-2, 30m: Landsat, 100m: intermediate, 250/500m: MODIS.
+# No point keeping geometry finer than the coarsest pixel that will sample it.
+_SIMPLIFY_LADDER_M = [10, 30, 100, 250, 500]
+
+# Equal-area projection for simplification. Tolerances in metres are
+# consistent globally up to ~75° latitude. Beyond that, polar projections
+# (EPSG:3995 / EPSG:3976) would be more appropriate, but land-surface
+# remote sensing workflows rarely reach those latitudes.
+_METRIC_CRS = 'EPSG:6933'
 
 
 shp_path            = snakemake.input.shp
@@ -88,48 +102,56 @@ if gdf['region_id'].duplicated().any():
             new_ids.append(rid)
     gdf['region_id'] = new_ids
 
-# Simplification uses two tolerances; the stricter (larger) one is applied:
-#   resolution_tol — no point keeping geometry finer than the finest sensor's pixel size.
-#   budget_tol     — minimum tolerance required to stay under the GEE coord budget.
-# 1° ≈ 111 000 m, so tolerance = scale_m / 111 000 converts metres to degrees.
-resolution_tol = finest_resolution_m / 111_000
-log_progress(f"Resolution tolerance: {resolution_tol:.6f}° ({finest_resolution_m}m finest sensor)")
+# Reproject to equal-area metric CRS for simplification.
+# Coord counts are projection-independent so the budget check is valid in
+# either CRS — but the tolerance must be in metres to be physically meaningful.
+gdf_metric = gdf.to_crs(_METRIC_CRS)
 
-total = sum(_count_coords(g) for g in gdf.geometry)
+# Simplification uses two tolerances; the larger one is applied:
+#   resolution_tol_m — no point keeping geometry finer than the finest sensor pixel.
+#   budget_tol_m     — minimum tolerance needed to stay under the GEE coord budget.
+resolution_tol_m = finest_resolution_m
+log_progress(f"Resolution tolerance: {resolution_tol_m}m (finest sensor)")
+
+total = sum(_count_coords(g) for g in gdf_metric.geometry)
 log_progress(f"Geometry complexity: {total:,} total coordinates (budget: {_COORD_BUDGET:,})")
 
-budget_tol = 0.0
+budget_tol_m = 0.0
 if total > _COORD_BUDGET:
     log_progress("Coord count exceeds budget — finding minimum budget tolerance")
-    for tol in _SIMPLIFY_LADDER:
-        candidate = gdf.copy()
+    for tol in _SIMPLIFY_LADDER_M:
+        candidate = gdf_metric.copy()
         candidate["geometry"] = candidate.geometry.simplify(tol, preserve_topology=True)
         candidate = candidate[~candidate.geometry.is_empty & candidate.geometry.notna()]
         reduced = sum(_count_coords(g) for g in candidate.geometry)
-        log_progress(f"  tolerance={tol}: {reduced:,} coords")
+        log_progress(f"  tolerance={tol}m: {reduced:,} coords")
         if reduced <= _COORD_BUDGET:
-            budget_tol = tol
+            budget_tol_m = tol
             break
     else:
-        budget_tol = _SIMPLIFY_LADDER[-1]
-        log_progress(f"WARNING: Still above budget after maximum tolerance={budget_tol}")
+        budget_tol_m = _SIMPLIFY_LADDER_M[-1]
+        log_progress(f"WARNING: Still above budget after maximum tolerance={budget_tol_m}m")
 else:
     log_progress("Geometry within budget")
 
-applied_tol = max(resolution_tol, budget_tol)
+applied_tol_m = max(resolution_tol_m, budget_tol_m)
 log_progress(
-    f"Applying tolerance={applied_tol:.6f}° "
-    f"(resolution_tol={resolution_tol:.6f}, budget_tol={budget_tol:.6f})"
+    f"Applying tolerance={applied_tol_m}m "
+    f"(resolution_tol={resolution_tol_m}m, budget_tol={budget_tol_m}m)"
 )
-simplified = gdf.copy()
-simplified["geometry"] = gdf.geometry.simplify(applied_tol, preserve_topology=True)
+
+simplified = gdf_metric.copy()
+simplified["geometry"] = gdf_metric.geometry.simplify(applied_tol_m, preserve_topology=True)
 simplified = simplified[~simplified.geometry.is_empty & simplified.geometry.notna()]
 reduced_total = sum(_count_coords(g) for g in simplified.geometry)
 log_progress(
     f"Simplified: {total:,} → {reduced_total:,} coords "
     f"({100 * (1 - reduced_total / total):.0f}% reduction)"
 )
-gdf = simplified
+
+# Reproject back to 4326 — everything downstream (GEE upload, chunk workers)
+# continues to receive WGS84 geometries exactly as before.
+gdf = simplified.to_crs("EPSG:4326")
 
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 gdf.to_parquet(out_path)

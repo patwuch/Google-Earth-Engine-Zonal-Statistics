@@ -164,6 +164,7 @@ def build_reducer(stat_name):
         "MAX":    ee.Reducer.max(),
         "MIN":    ee.Reducer.min(),
         "MEDIAN": ee.Reducer.median(),
+        "STD":    ee.Reducer.stdDev(),
     }.get(stat_name.upper(), ee.Reducer.mean())
 
 
@@ -188,10 +189,6 @@ def build_annual_stats(collection, regions, scale, stats_list, band, tile_scale=
     Compute annual zonal statistics using the same reducer for both temporal
     (across images) and spatial (across pixels within a region) aggregation.
 
-    Each stat is reduced independently so that, e.g., MEDIAN uses median both
-    temporally and spatially — avoiding the 'mean-of-medians' problem that
-    arises when the spatial step always defaults to mean.
-
     For multiple stats the results are joined on system:index so the returned
     FeatureCollection has one feature per region with all '{band}_{stat}'
     properties present.
@@ -207,7 +204,6 @@ def build_annual_stats(collection, regions, scale, stats_list, band, tile_scale=
             collection=regions,
             reducer=reducer,
             scale=scale,
-            crs='EPSG:4326',
             tileScale=tile_scale,
         )
 
@@ -244,7 +240,6 @@ def build_daily_stats(collection, regions, scale, spatial_reducer, tile_scale=1)
             collection=regions,
             reducer=spatial_reducer,
             scale=scale,
-            crs='EPSG:4326',
             tileScale=tile_scale,
         ).map(lambda f: f.set("Date", date_str))
     return collection.map(reduce_image).flatten()
@@ -270,5 +265,4 @@ def build_histogram_stats(collection, regions, scale, band):
         collection=regions,
         reducer=ee.Reducer.frequencyHistogram(),
         scale=scale,
-        crs='EPSG:4326'
     )

@@ -9,7 +9,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "cadence": "daily",
         "categorical": False,
         "content": {
-            "precipitation": {"stats": ["sum", "mean", "max"], "default_stats": ["sum"]},
+            "precipitation": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
         },
         "label": "CHIRPS Daily Precipitation",
         "description": "Global precipitation (0.05° resolution).",
@@ -19,25 +19,25 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "ee_collection": "ECMWF/ERA5_LAND/DAILY_AGGR",
         "min_date": "1950-01-01",
         "max_date": "2026-02-28",
-        "scale": 9000,
+        "scale": 11132,
         "cadence": "daily",
         "categorical": False,
         "content": {
-            "temperature_2m":               {"stats": ["mean", "min", "max"], "default_stats": ["mean"]},
-            "temperature_2m_min":           {"stats": ["mean", "min", "max"], "default_stats": ["mean"]},
-            "temperature_2m_max":           {"stats": ["mean", "min", "max"], "default_stats": ["mean"]},
-            "total_precipitation_sum":      {"stats": ["sum", "mean"], "default_stats": ["sum"]},
-            "total_evaporation_sum":        {"stats": ["sum", "mean"], "default_stats": ["sum"]},
-            "potential_evaporation_sum":    {"stats": ["sum", "mean"], "default_stats": ["sum"]},
-            "snow_evaporation_sum":         {"stats": ["sum", "mean"], "default_stats": ["sum"]},
-            "evaporation_from_bare_soil_sum": {"stats": ["sum", "mean"], "default_stats": ["sum"]},
-            "evaporation_from_open_water_surfaces_excluding_oceans_sum": {"stats": ["sum", "mean"], "default_stats": ["sum"]},
-            "evaporation_from_the_top_of_canopy_sum": {"stats": ["sum", "mean"], "default_stats": ["sum"]},
-            "evaporation_from_vegetation_transpiration_sum": {"stats": ["sum", "mean"], "default_stats": ["sum"]},
+            "temperature_2m":               {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "temperature_2m_min":           {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "temperature_2m_max":           {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "total_precipitation_sum":      {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "total_evaporation_sum":        {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "potential_evaporation_sum":    {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "snow_evaporation_sum":         {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "evaporation_from_bare_soil_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "evaporation_from_open_water_surfaces_excluding_oceans_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "evaporation_from_the_top_of_canopy_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "evaporation_from_vegetation_transpiration_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
         },
         "label": "ERA5-Land Climate",
-        "description": "Reanalysis data for land variables (9km resolution).",
-        "resolution_m": 9000,
+        "description": "Reanalysis data for land variables (0.1° / ~11km native resolution).",
+        "resolution_m": 11132,
     },
     "MODIS_LST": {
         "ee_collection": "MODIS/061/MOD11A2",
@@ -48,8 +48,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "categorical": False,
         "content": {
             "LST_Day_1km": {
-                "stats": ["mean", "median", "max"],
-                "default_stats": ["mean"],
+                "stats": ["sum", "mean", "min", "max", "std"],
+                "default_stats": ["sum", "mean", "min", "max", "std"],
                 # MOD11A2 QC_Day bits 0–1: 00=good, 01=other quality — keep both.
                 "qa_mask": {
                     "band": "QC_Day",
@@ -57,8 +57,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                 },
             },
             "LST_Night_1km": {
-                "stats": ["mean", "median", "max"],
-                "default_stats": ["mean"],
+                "stats": ["sum", "mean", "min", "max", "std"],
+                "default_stats": ["sum", "mean", "min", "max", "std"],
                 # MOD11A2 QC_Night bits 0–1: same encoding as QC_Day.
                 "qa_mask": {
                     "band": "QC_Night",
@@ -79,8 +79,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "categorical": False,
         "content": {
             "NDVI": {
-                "stats": ["mean", "median"],
-                "default_stats": ["mean"],
+                "stats": ["sum", "mean", "min", "max", "std"],
+                "default_stats": ["sum", "mean", "min", "max", "std"],
                 # MOD13Q1 SummaryQA bits 0–1: 00=good, 01=marginal — keep both.
                 "qa_mask": {
                     "band": "SummaryQA",
@@ -88,8 +88,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                 },
             },
             "EVI": {
-                "stats": ["mean", "median"],
-                "default_stats": ["mean"],
+                "stats": ["sum", "mean", "min", "max", "std"],
+                "default_stats": ["sum", "mean", "min", "max", "std"],
                 "qa_mask": {
                     "band": "SummaryQA",
                     "tests": [{"start": 0, "end": 1, "good_values": [0, 1]}],
@@ -154,13 +154,13 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "cadence": "annual",
         "categorical": False,
         "content": {
-            "population": {"stats": ["sum"], "default_stats": ["sum"]},
+            "population": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
         },
         "label": "WorldPop Population (100m)",
         "description": "Global unconstrained population count (100m resolution, annual 2000–2020).",
         "resolution_m": 100,
     },
-    "NDBI": {
+    "Landsat NDBI": {
         # No single ee_collection — worker uses multi_collections to build a merged NDBI series.
         # gee_weight=4: computed from 30m Landsat on-the-fly,  more expensive per job than
         # precomputed products.  With gee_concurrency=10, caps concurrent NDBI jobs to
@@ -232,7 +232,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "cadence": "seasonal",
         "categorical": False,
         "content": {
-            "NDBI": {"stats": ["mean", "median"], "default_stats": ["mean"]},
+            "NDBI": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
         },
         "label": "NDBI (Landsat 5 / 7 / 8)",
         "description": (
@@ -241,5 +241,61 @@ PRODUCT_REGISTRY: dict[str, dict] = {
             "Landsat 8 OLI Apr 2013–2025. Formula: (SWIR − NIR) / (SWIR + NIR)."
         ),
         "resolution_m": 30,
+    },
+    "MODIS_NDBI": {
+        "gee_weight": 2,
+        "tile_scale": 2,
+        "ee_collection": None,
+        "multi_collections": [
+            {
+                # Terra — MOD09GA daily surface reflectance, available from 2000-02-24.
+                "id":         "MODIS/061/MOD09GA",
+                "date_start": "2000-02-24",
+                "date_end":   "2025-12-31",
+                "swir_band":  "sur_refl_b06",
+                "nir_band":   "sur_refl_b02",
+                # MOD09GA state_1km bits 0–1: 00=clear, 01=cloudy, 10=mixed, 11=not set.
+                # Keep only clear (00).
+                "qa_mask": {
+                    "band": "state_1km",
+                    "tests": [
+                        {"start": 0, "end": 1, "good_values": [0]},
+                    ],
+                },
+            },
+            {
+                # Aqua — MYD09GA daily surface reflectance, available from 2002-07-04.
+                # Merged with Terra to increase observation density and reduce cloud gaps.
+                "id":         "MODIS/061/MYD09GA",
+                "date_start": "2002-07-04",
+                "date_end":   "2025-12-31",
+                "swir_band":  "sur_refl_b06",
+                "nir_band":   "sur_refl_b02",
+                "qa_mask": {
+                    "band": "state_1km",
+                    "tests": [
+                        {"start": 0, "end": 1, "good_values": [0]},
+                    ],
+                },
+            },
+        ],
+        "min_date": "2000-02-24",
+        "max_date": "2025-12-31",
+        "scale": 500,
+        "cadence": "seasonal",
+        "categorical": False,
+        "content": {
+            "NDBI": {
+                "stats": ["sum", "mean", "min", "max", "std"],
+                "default_stats": ["sum", "mean", "min", "max", "std"],
+            },
+        },
+        "label": "NDBI (MODIS Terra + Aqua)",
+        "description": (
+            "Normalized Difference Built-up Index (500m, per-scene), "
+            "merged from MODIS Terra (MOD09GA, 2000–) and Aqua (MYD09GA, 2002–) "
+            "daily surface reflectance. Formula: (SWIR − NIR) / (SWIR + NIR)."
+        ),
+        "resolution_m": 500,
     },
 }

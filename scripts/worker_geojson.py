@@ -93,11 +93,19 @@ def _split_attrs(gdf):
 
 
 def _gdf_to_ee(gdf_slim):
-    """Convert a slim GeoDataFrame (geometry + region_id) to an EE FeatureCollection."""
-    with tempfile.TemporaryDirectory(prefix="gee_geom_") as tmpdir:
-        geom_path = os.path.join(tmpdir, f"geometry_{uuid.uuid4().hex}.shp")
-        gdf_slim.to_file(geom_path)
-        return geemap.shp_to_ee(geom_path)
+    """
+    Convert a slim GeoDataFrame (geometry + region_id) to an EE FeatureCollection.
+    Uses __geo_interface__ directly — avoids shapefile roundtrip which truncates
+    column names to 10 chars and drops unsupported geometry types.
+    """
+    features = [
+        ee.Feature(
+            ee.Geometry(row.geometry.__geo_interface__),
+            {"region_id": str(row["region_id"])}
+        )
+        for _, row in gdf_slim.iterrows()
+    ]
+    return ee.FeatureCollection(features)
 
 def log_progress(message):
     """Write progress message to log file"""
@@ -204,8 +212,7 @@ def export_to_geojson(image, regions, scale, out_geojson, max_retries=5, prop_re
         stats = image.reduceRegions(
             collection=regions,
             reducer=reducer if reducer is not None else ee.Reducer.mean(),
-            scale=scale,
-            crs='EPSG:4326'
+            scale=scale
         )
         stats = stats.select(stats.first().propertyNames(), retainGeometry=False)
 
@@ -323,6 +330,7 @@ try:
     time_chunk = getattr(snakemake.wildcards, "time_chunk", "")
     aoi        = snakemake.input.aoi
     out        = snakemake.output.geojson
+    preprocess_tol_m = snakemake.params.finest_resolution_m
 
     # Annual only: stamp the chunk start date as Date (one value per region per year).
     # Daily and composite: GEE sets Date per image via build_daily_stats.
@@ -339,21 +347,25 @@ try:
     del gdf_full
     gdf_original = gdf_slim  # keep for empty-feature fallback
 
-    # Simplify region geometries to match this product's native scale before
-    # embedding in GEE.  Boundaries finer than the pixel size don't affect
-    # zonal statistics — GEE samples at `scale` metres anyway — but every
-    # extra coordinate inflates the value:compute request payload.
-    # 1° ≈ 111 000 m, so tolerance = scale_m / 111 000 converts metres to degrees.
-    # The preprocessing step already simplified to max(resolution_tol, budget_tol)
-    # where resolution_tol = finest_resolution_m / 111_000 across all selected products.
-    # Only re-simplify here if this product's native scale is coarser than that.
-    finest_resolution_m = snakemake.params.finest_resolution_m
-    preprocess_tol = finest_resolution_m / 111_000
-    gee_tolerance = scale / 111_000
-    if gee_tolerance > preprocess_tol:
+    
+    
+    if scale > preprocess_tol_m:
         gdf_for_gee = gdf_slim.copy()
-        gdf_for_gee.geometry = gdf_slim.geometry.simplify(gee_tolerance)
-        log_progress(f"Re-simplified for {scale}m product: tolerance={gee_tolerance:.5f}° (preprocess was {preprocess_tol:.5f}°)")
+        gdf_metric = gdf_for_gee.to_crs('EPSG:6933')
+        bounds_m = gdf_metric.geometry.union_all().bounds
+        min_dim_m = min(bounds_m[2] - bounds_m[0], bounds_m[3] - bounds_m[1])
+        # Only re-simplify when the region is at least 3 pixel-widths across.
+        # For narrower regions the simplification can distort the polygon enough
+        # that no GEE analysis-grid pixel centers fall within it, producing
+        # all-null statistics even when valid data exists at the native scale.
+        if min_dim_m >= scale * 3:
+            gdf_metric["geometry"] = gdf_metric.geometry.simplify(scale, preserve_topology=True)
+            gdf_for_gee = gdf_metric.to_crs('EPSG:4326')
+            gdf_for_gee = gdf_for_gee[~gdf_for_gee.geometry.is_empty & gdf_for_gee.geometry.notna()]
+            log_progress(f"Re-simplified for {scale}m product (min dim {min_dim_m:.0f}m, preprocess was {preprocess_tol_m}m)")
+        else:
+            gdf_for_gee = gdf_slim
+            log_progress(f"Skipped re-simplification: region too small ({min_dim_m:.0f}m) for {scale}m pixel scale")
     else:
         gdf_for_gee = gdf_slim
     regions = _gdf_to_ee(gdf_for_gee)

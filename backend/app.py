@@ -553,6 +553,24 @@ def _launch_snakemake(run_id: str, payload: dict, log_path: Path) -> subprocess.
     return proc
 
 
+def _all_results_present(run_id: str | None, meta: dict | None) -> bool:
+    """Return True if every product has its final merged parquet on disk."""
+    if not run_id or not meta:
+        return False
+    payload  = (meta or {}).get("payload") or {}
+    products = payload.get("products") or {}
+    if not products:
+        return False
+    results_dir = RUNS_DIR / run_id / "results"
+    for prod, cfg in products.items():
+        start = cfg.get("start_date", "")
+        end   = cfg.get("end_date", "")
+        expected = results_dir / prod / f"{prod}_{start}_to_{end}.parquet"
+        if not expected.exists():
+            return False
+    return True
+
+
 def _resolve_status(meta: dict | None) -> str:
     if meta is None:
         return "unknown"
@@ -587,13 +605,17 @@ def _resolve_status(meta: dict | None) -> str:
                                  error_message="Run process exited before PID was recorded")
             return "failed"
         if not _is_pid_alive(pid):
-            # Process is gone — infer final status from jobs table.
+            # Process is gone — infer final status.
             # pid was set so there's no retry race condition; safe to persist.
             run_id = meta.get("run_id")
-            counts = _get_job_counts(run_id, meta) if run_id else {}
-            total  = counts.get("total", 0)
-            done   = counts.get("done", 0)
-            resolved = "completed" if (total > 0 and done == total) else "failed"
+            # Check final result files first — Snakemake removes intermediate chunk
+            # files on success, so _get_job_counts().done will be 0 for a completed run.
+            resolved = "completed" if _all_results_present(run_id, meta) else None
+            if resolved is None:
+                counts = _get_job_counts(run_id, meta) if run_id else {}
+                total  = counts.get("total", 0)
+                done   = counts.get("done", 0)
+                resolved = "completed" if (total > 0 and done == total) else "failed"
             if run_id:
                 error_msg = None if resolved == "completed" else "Pipeline process exited unexpectedly"
                 _update_registry(run_id, meta.get("payload") or {}, status=resolved,
@@ -630,6 +652,7 @@ def _fix_payload_paths(run_id: str, payload: dict) -> dict:
     payload["output_dir"] = _results_dir(run_id).as_posix()
     shp = payload.get("shp_path")
     if isinstance(shp, str):
+        shp = shp.replace("\\", "/")  # normalise Windows backslashes before path operations
         p = Path(shp)
         if not p.exists():
             p = RUNS_DIR / run_id / "inputs" / p.name
@@ -929,6 +952,7 @@ def submit_run(body: SubmitRunRequest):
             "bands":            pc.bands,
             "statistics":       pc.stats,       # Snakefile uses "statistics"
             "scale":            info["scale"],
+            "resolution_m":     info.get("resolution_m", info["scale"]),
             "cadence":          cadence,
             "categorical":      info["categorical"],
             "start_date":       pc.date_start,
