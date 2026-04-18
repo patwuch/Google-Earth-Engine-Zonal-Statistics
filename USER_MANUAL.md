@@ -163,9 +163,12 @@ You can enable multiple datasets in one run; they are processed in parallel.
 | **ERA5-Land** | Temperature, precipitation, evaporation (11 variables) | ~9 km | 1950 → present |
 | **MODIS LST** | Land surface temperature (day + night) | 1 km | Feb 2000 → present |
 | **MODIS NDVI/EVI** | Vegetation indices | 250 m | Feb 2000 → present |
+| **NDBI (Landsat 5/7/8)** | Normalized Difference Built-up Index | 30 m | 1984–2025 |
+| **NDBI (MODIS Terra + Aqua)** | Normalized Difference Built-up Index | 500 m | Feb 2000–2025 |
 | **WorldCover v1.0** | Land cover classification | 10 m | 2020 only |
 | **WorldCover v2.0** | Land cover classification | 10 m | 2021 only |
 | **MODIS LULC** | Land use and land cover types | 500 m | 2001–2023 |
+| **WorldPop** | Population count | 100 m | 2000–2020 |
 
 ---
 

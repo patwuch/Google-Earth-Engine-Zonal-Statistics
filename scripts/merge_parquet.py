@@ -90,7 +90,7 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
                 select_parts = []
                 for col_name, col_type, *_ in all_col_info:
                     q = f'"{col_name}"'
-                    if col_name in NON_STAT_COLS or 'GEOMETRY' in col_type.upper():
+                    if col_name in NON_STAT_COLS or 'GEOMETRY' in col_type.upper() or col_name.startswith(f"{band}_"):
                         select_parts.append(q)
                     else:
                         select_parts.append(f'{q} AS "{band}_{col_name}"')
