@@ -46,7 +46,7 @@ _COORD_BUDGET = 200_000
 # Simplification ladder in metres — aligns with common sensor resolutions.
 # 10m: Sentinel-2, 30m: Landsat, 100m: intermediate, 250/500m: MODIS.
 # No point keeping geometry finer than the coarsest pixel that will sample it.
-_SIMPLIFY_LADDER_M = [10, 30, 100, 250, 500]
+_SIMPLIFY_LADDER_M = [10, 30, 100, 250, 500, 1000, 5566, 11132]
 
 # Equal-area projection for simplification. Tolerances in metres are
 # consistent globally up to ~75° latitude. Beyond that, polar projections
@@ -120,6 +120,8 @@ budget_tol_m = 0.0
 if total > _COORD_BUDGET:
     log_progress("Coord count exceeds budget — finding minimum budget tolerance")
     for tol in _SIMPLIFY_LADDER_M:
+        if tol < resolution_tol_m:
+            continue  # resolution_tol already covers this; max() would discard the result anyway
         candidate = gdf_metric.copy()
         candidate["geometry"] = candidate.geometry.simplify(tol, preserve_topology=True)
         candidate = candidate[~candidate.geometry.is_empty & candidate.geometry.notna()]
