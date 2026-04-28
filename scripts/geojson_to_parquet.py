@@ -17,10 +17,15 @@ def log_progress(message, log_file=None):
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] {message}\n")
 
+def _sql_path(p) -> str:
+    """Return a forward-slash path string safe for embedding in DuckDB SQL literals."""
+    return str(p).replace("\\", "/")
+
+
 def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
     """
     Convert GeoJSON to GeoParquet using DuckDB.
-    
+
     DuckDB's spatial extension provides:
     - Efficient columnar storage
     - Automatic compression
@@ -28,12 +33,17 @@ def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
     - Schema enforcement
     """
     log_progress(f"Converting {geojson_path} → {parquet_path}", log_file)
-    
+
     if not os.path.exists(geojson_path):
         raise FileNotFoundError(f"Input GeoJSON not found: {geojson_path}")
-    
+
     # Ensure output directory exists
-    os.makedirs(os.path.dirname(parquet_path), exist_ok=True)
+    out_dir = os.path.dirname(parquet_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    # Normalise to forward slashes so DuckDB SQL string literals are valid on Windows.
+    geojson_path_sql = _sql_path(geojson_path)
+    parquet_path_sql = _sql_path(parquet_path)
     
     # Connect to DuckDB (in-memory)
     conn = duckdb.connect(':memory:')
@@ -48,8 +58,8 @@ def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
         # st_read automatically handles geometry parsing
         log_progress(f"Reading GeoJSON: {geojson_path}", log_file)
         conn.execute(f"""
-            CREATE TABLE geojson_data AS 
-            SELECT * FROM st_read('{geojson_path}')
+            CREATE TABLE geojson_data AS
+            SELECT * FROM st_read('{geojson_path_sql}')
         """)
         
         # Get row count
@@ -102,7 +112,7 @@ def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
         log_progress(f"Writing GeoParquet: {parquet_path}", log_file)
         conn.execute(f"""
             COPY {export_table}
-            TO '{parquet_path}'
+            TO '{parquet_path_sql}'
             (FORMAT PARQUET, COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000)
         """)
         

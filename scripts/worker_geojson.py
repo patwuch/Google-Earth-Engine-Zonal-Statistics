@@ -22,6 +22,7 @@ from workflow.gee_ops import (
     build_reducer,
     build_compound_reducer,
     build_daily_stats,
+    build_seasonal_stats,
     build_annual_stats,
     build_histogram_stats,
 )
@@ -241,7 +242,7 @@ def export_to_geojson(image, regions, scale, out_geojson, max_retries=5, prop_re
 
             # Rename reducer output properties to expected {band}_{stat} convention.
             # GEE reduceRegions names output properties after the reducer (e.g. 'mean'),
-            # not the band name, so we rename here before writing.
+            # not the band name, so rename here before writing.
             if prop_rename:
                 for feature in features:
                     props = feature.get("properties", {})
@@ -251,14 +252,20 @@ def export_to_geojson(image, regions, scale, out_geojson, max_retries=5, prop_re
 
             # For categorical products, serialize histogram dicts to JSON strings
             # so downstream parquet storage remains flat/tabular.
+            # normalize_histogram converts raw pixel counts to proportions (sum → 1),
+            # omitting absent classes rather than storing explicit zeros.
             if categorical:
                 for feature in features:
                     props = feature.get("properties", {})
                     for key, val in list(props.items()):
                         if isinstance(val, dict):
+                            if normalize_histogram and val:
+                                total = sum(val.values())
+                                if total > 0:
+                                    val = {k: v / total for k, v in val.items()}
                             props[key] = json.dumps(val)
 
-            # Rejoin original input attributes (not sent to GEE) using region_id.
+            # Rejoin original input attributes using region_id.
             if attr_lookup:
                 for feature in features:
                     rid = feature.get("properties", {}).get("region_id")
@@ -298,8 +305,6 @@ def export_to_geojson(image, regions, scale, out_geojson, max_retries=5, prop_re
                 log_progress(f"✗ Export failed (attempt {attempt+1}/{max_retries}): {error_msg}")
                 if attempt < max_retries - 1:
                     if is_rate_limit:
-                        # Exponential backoff: 60s, 120s, 240s, … so we don't immediately
-                        # hammer GEE again while the quota window is still saturated.
                         import time
                         wait = 60 * (2 ** attempt)
                         log_progress(f"Rate-limited by GEE — waiting {wait}s before retry {attempt+2}/{max_retries}")
@@ -323,8 +328,11 @@ try:
     start             = snakemake.params.start_date
     end               = snakemake.params.end_date
     cadence           = snakemake.params.cadence
-    categorical       = snakemake.params.categorical
-    qa_mask           = snakemake.params.qa_mask   # None or QA mask config dict
+    categorical          = snakemake.params.categorical
+    normalize_histogram  = snakemake.params.normalize_histogram
+    qa_mask           = snakemake.params.qa_mask        # None or QA mask config dict
+    band_transform    = snakemake.params.band_transform  # None or {"scale": float, "offset": float}
+    band_compute      = snakemake.params.band_compute    # None or {"type": str, "input_bands": [...], ...}
     band       = snakemake.wildcards.band
     prod       = getattr(snakemake.wildcards, "prod", "")
     time_chunk = getattr(snakemake.wildcards, "time_chunk", "")
@@ -373,9 +381,7 @@ try:
 
     # Build a compact filter geometry in Python (no GEE lazy reference).
     # Only used for filterBounds — excludes scenes with no real overlap.
-    # Simplified very aggressively (0.5°≈55km): Landsat scenes are 185km wide
-    # so this level of precision is more than sufficient for scene filtering,
-    # and keeps the serialized geometry to a few KB regardless of AOI complexity.
+    # Simplified very aggressively (0.5°≈55km)
     # The full regions FeatureCollection is still used for reduceRegions.
     # Use a bounding-box filter region — always valid for ee.Geometry.BBox,
     # immune to degenerate geometries from aggressive simplification, and
@@ -392,10 +398,35 @@ try:
             collection = ee.ImageCollection([])  # No sensors active in this chunk  # type: ignore[assignment]
     else:
         collection = ee.ImageCollection(col_id).filterDate(start, end_dt).filterBounds(filter_region)
-        if qa_mask is not None:
-            log_progress(f"Applying QA bit-mask: band={qa_mask['band']}, tests={qa_mask['tests']}")
-            collection = collection.map(lambda img: apply_qa_mask(img, qa_mask))
-        collection = collection.select([band])
+        if band_compute:
+            _bc_input_bands = band_compute["input_bands"]
+            _bc_qa_masks    = band_compute.get("input_qa_masks", [])
+            _bc_type        = band_compute.get("type", "mean")
+            log_progress(f"Computing derived band '{band}' ({_bc_type} of {_bc_input_bands})")
+            def _compute_derived(img, ibs=_bc_input_bands, iqa=_bc_qa_masks, ctype=_bc_type, out=band):
+                for qam in iqa:
+                    img = apply_qa_mask(img, qam)
+                selected = [img.select(b) for b in ibs]
+                result = selected[0]
+                for sb in selected[1:]:
+                    result = result.add(sb)
+                if ctype == "mean":
+                    result = result.divide(len(ibs))
+                return result.rename(out).copyProperties(img, ["system:time_start"])
+            collection = collection.map(_compute_derived)
+        else:
+            if qa_mask is not None:
+                log_progress(f"Applying QA bit-mask: band={qa_mask['band']}, tests={qa_mask['tests']}")
+                collection = collection.map(lambda img: apply_qa_mask(img, qa_mask))
+            collection = collection.select([band])
+        if band_transform:
+            _bt_scale  = band_transform.get("scale", 1.0)
+            _bt_offset = band_transform.get("offset", 0.0)
+            def _apply_transform(img, s=_bt_scale, o=_bt_offset):
+                transformed = img.multiply(s).add(o) if s != 1.0 else img.add(o)
+                return transformed.copyProperties(img, ["system:time_start"])
+            collection = collection.map(_apply_transform)
+            log_progress(f"Band transform applied: ×{_bt_scale} + {_bt_offset}")
 
     collection_count = _blocking_getinfo(collection.size(), label="size()")
     log_progress(f"Collection has {collection_count} images")
@@ -459,10 +490,14 @@ try:
                 precomputed_stats=stats_fc, attr_lookup=attr_lookup,
                 extra_props=extra_props
             )
-        else:
-            # Annual: one value per region for the whole year.
-            # build_annual_stats applies the matching reducer both temporally and
-            # spatially for each stat, avoiding the 'mean-of-X' approximation.
+        elif cadence == "seasonal":
+            # One value per region per quarter. Temporal reducer collapses all scenes
+            # in the window; spatial reducer is decoupled (mean for sum/std/variance)
+            # so results are region-size-invariant.
+            stats_fc = build_seasonal_stats(collection, regions_fc, scale, stats_list, band, tile_scale)
+        elif cadence == "annual":
+            # One value per region per year. Single image per year (e.g. WorldPop) so
+            # the same reducer for both passes is correct — sum gives total population, etc.
             stats_fc = build_annual_stats(collection, regions_fc, scale, stats_list, band, tile_scale)
             return export_to_geojson(
                 image=None, regions=regions_fc, scale=scale, out_geojson=out,
@@ -470,12 +505,14 @@ try:
                 precomputed_stats=stats_fc, attr_lookup=attr_lookup,
                 extra_props=extra_props
             )
+        else:
+            raise ValueError(f"Unknown cadence '{cadence}' for product '{prod}'/{band}")
 
     log_progress(f"Extracting {len(stats_list)} stat(s): {stats_list}")
     success = _do_export(regions, max_retries=3)
 
     if not success:
-        # Geometry was already under the coord budget, so failure is likely a transient
+        # Geometry was supposed to be already under the coord budget, so failure is likely a transient
         # GEE error or an edge case where our estimate was insufficient.
         # Apply one emergency simplification step at the maximum tolerance and retry once.
         emergency_tol = _SIMPLIFY_LADDER[-1]

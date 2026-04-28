@@ -162,8 +162,11 @@ rule extract_geojson_chunk:
         scale = lambda wildcards: PRODUCTS[wildcards.prod]["scale"],
         tile_scale = lambda wildcards: PRODUCTS[wildcards.prod].get("tile_scale", 1),
         cadence = lambda wildcards: PRODUCTS[wildcards.prod].get("cadence", "monthly"),
-        categorical = lambda wildcards: PRODUCTS[wildcards.prod].get("categorical", False),
+        categorical          = lambda wildcards: PRODUCTS[wildcards.prod].get("categorical", False),
+        normalize_histogram  = lambda wildcards: PRODUCTS[wildcards.prod].get("normalize_histogram", False),
         qa_mask = lambda wildcards: PRODUCTS[wildcards.prod].get("band_masks", {}).get(wildcards.band),
+        band_transform = lambda wildcards: PRODUCTS[wildcards.prod].get("band_transforms", {}).get(wildcards.band),
+        band_compute   = lambda wildcards: PRODUCTS[wildcards.prod].get("band_computes",   {}).get(wildcards.band),
         start_date = lambda wc: chunk_start_date(wc.time_chunk),
         end_date   = lambda wc: chunk_end_date(wc.time_chunk),
         finest_resolution_m = _finest_resolution_m

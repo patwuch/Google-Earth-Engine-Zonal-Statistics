@@ -9,7 +9,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "cadence": "daily",
         "categorical": False,
         "content": {
-            "precipitation": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "precipitation": {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
         },
         "label": "CHIRPS Daily Precipitation",
         "description": "Global precipitation (0.05° resolution).",
@@ -23,17 +23,17 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "cadence": "daily",
         "categorical": False,
         "content": {
-            "temperature_2m":               {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "temperature_2m_min":           {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "temperature_2m_max":           {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "total_precipitation_sum":      {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "total_evaporation_sum":        {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "potential_evaporation_sum":    {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "snow_evaporation_sum":         {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "evaporation_from_bare_soil_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "evaporation_from_open_water_surfaces_excluding_oceans_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "evaporation_from_the_top_of_canopy_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
-            "evaporation_from_vegetation_transpiration_sum": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "temperature_2m":               {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"], "band_transform": {"scale": 1.0, "offset": -273.15}},
+            "temperature_2m_min":           {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"], "band_transform": {"scale": 1.0, "offset": -273.15}},
+            "temperature_2m_max":           {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"], "band_transform": {"scale": 1.0, "offset": -273.15}},
+            "total_precipitation_sum":      {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
+            "total_evaporation_sum":        {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
+            "potential_evaporation_sum":    {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
+            "snow_evaporation_sum":         {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
+            "evaporation_from_bare_soil_sum": {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
+            "evaporation_from_open_water_surfaces_excluding_oceans_sum": {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
+            "evaporation_from_the_top_of_canopy_sum": {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
+            "evaporation_from_vegetation_transpiration_sum": {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
         },
         "label": "ERA5-Land Climate",
         "description": "Reanalysis data for land variables (0.1° / ~11km native resolution).",
@@ -55,6 +55,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                     "band": "QC_Day",
                     "tests": [{"start": 0, "end": 1, "good_values": [0, 1]}],
                 },
+                # Raw DN → °C: value × 0.02 gives Kelvin; subtract 273.15 for Celsius.
+                "band_transform": {"scale": 0.02, "offset": -273.15},
             },
             "LST_Night_1km": {
                 "stats": ["sum", "mean", "min", "max", "std"],
@@ -64,6 +66,23 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                     "band": "QC_Night",
                     "tests": [{"start": 0, "end": 1, "good_values": [0, 1]}],
                 },
+                # Raw DN → °C: value × 0.02 gives Kelvin; subtract 273.15 for Celsius.
+                "band_transform": {"scale": 0.02, "offset": -273.15},
+            },
+            "LST_Mean": {
+                "stats": ["sum", "mean", "min", "max", "std"],
+                "default_stats": ["mean", "min", "max", "std"],
+                # Pixel-wise average of Day and Night; only valid where both pass QA.
+                "band_compute": {
+                    "type": "mean",
+                    "input_bands": ["LST_Day_1km", "LST_Night_1km"],
+                    "input_qa_masks": [
+                        {"band": "QC_Day",   "tests": [{"start": 0, "end": 1, "good_values": [0, 1]}]},
+                        {"band": "QC_Night", "tests": [{"start": 0, "end": 1, "good_values": [0, 1]}]},
+                    ],
+                },
+                # Raw DN → °C applied after averaging.
+                "band_transform": {"scale": 0.02, "offset": -273.15},
             },
         },
         "label": "MODIS Land Surface Temperature",
@@ -86,6 +105,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                     "band": "SummaryQA",
                     "tests": [{"start": 0, "end": 1, "good_values": [0, 1]}],
                 },
+                # MOD13Q1 raw values are scaled integers; multiply by 0.0001 to get [-1, 1].
+                "band_transform": {"scale": 0.0001, "offset": 0.0},
             },
             "EVI": {
                 "stats": ["sum", "mean", "min", "max", "std"],
@@ -94,6 +115,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                     "band": "SummaryQA",
                     "tests": [{"start": 0, "end": 1, "good_values": [0, 1]}],
                 },
+                # MOD13Q1 raw values are scaled integers; multiply by 0.0001 to get [-1, 1].
+                "band_transform": {"scale": 0.0001, "offset": 0.0},
             },
         },
         "label": "MODIS NDVI / EVI",
@@ -107,6 +130,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "scale": 10,
         "cadence": "annual",
         "categorical": True,
+        "normalize_histogram": True,
         "content": {
             "Map": {"stats": ["histogram"], "default_stats": ["histogram"]},
         },
@@ -121,6 +145,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "scale": 10,
         "cadence": "annual",
         "categorical": True,
+        "normalize_histogram": True,
         "content": {
             "Map": {"stats": ["histogram"], "default_stats": ["histogram"]},
         },
@@ -135,6 +160,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "scale": 500,
         "cadence": "annual",
         "categorical": True,
+        "normalize_histogram": True,
         "content": {
             "LC_Type1": {"stats": ["histogram"], "default_stats": ["histogram"]},
             "LC_Type2": {"stats": ["histogram"], "default_stats": ["histogram"]},
@@ -154,7 +180,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "cadence": "annual",
         "categorical": False,
         "content": {
-            "population": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "population": {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
         },
         "label": "WorldPop Population (100m)",
         "description": "Global unconstrained population count (100m resolution, annual 2000–2020).",
@@ -174,11 +200,14 @@ PRODUCT_REGISTRY: dict[str, dict] = {
             {
                 # LT05 routine operations suspended 2011-11-18 after a power anomaly;
                 # no usable imagery after November 2011.
-                "id":         "LANDSAT/LT05/C02/T1_L2",
-                "date_start": "1984-01-01",
-                "date_end":   "2011-11-30",
-                "swir_band":  "SR_B5",
-                "nir_band":   "SR_B4",
+                "id":               "LANDSAT/LT05/C02/T1_L2",
+                "date_start":       "1984-01-01",
+                "date_end":         "2011-11-30",
+                "swir_band":        "SR_B5",
+                "nir_band":         "SR_B4",
+                # Landsat C2 L2 surface reflectance scale factors (USGS).
+                "reflectance_scale":  0.0000275,
+                "reflectance_offset": -0.2,
                 # Landsat C02 L2 QA_PIXEL: keep pixels where cloud/shadow/snow bits are clear.
                 # bit 1=dilated cloud, bit 3=cloud shadow, bit 4=snow, bit 5=cloud — all must be 0.
                 "qa_mask": {
@@ -193,11 +222,13 @@ PRODUCT_REGISTRY: dict[str, dict] = {
             },
             {
                 # LE07 (SLC-off since 2003 but usable) bridges LT05 end to LC08 start.
-                "id":         "LANDSAT/LE07/C02/T1_L2",
-                "date_start": "2011-12-01",
-                "date_end":   "2013-04-10",
-                "swir_band":  "SR_B5",
-                "nir_band":   "SR_B4",
+                "id":               "LANDSAT/LE07/C02/T1_L2",
+                "date_start":       "2011-12-01",
+                "date_end":         "2013-04-10",
+                "swir_band":        "SR_B5",
+                "nir_band":         "SR_B4",
+                "reflectance_scale":  0.0000275,
+                "reflectance_offset": -0.2,
                 "qa_mask": {
                     "band": "QA_PIXEL",
                     "tests": [
@@ -210,11 +241,13 @@ PRODUCT_REGISTRY: dict[str, dict] = {
             },
             {
                 # LC08 first operational data: 2013-04-11.
-                "id":         "LANDSAT/LC08/C02/T1_L2",
-                "date_start": "2013-04-11",
-                "date_end":   "2025-12-31",
-                "swir_band":  "SR_B6",
-                "nir_band":   "SR_B5",
+                "id":               "LANDSAT/LC08/C02/T1_L2",
+                "date_start":       "2013-04-11",
+                "date_end":         "2025-12-31",
+                "swir_band":        "SR_B6",
+                "nir_band":         "SR_B5",
+                "reflectance_scale":  0.0000275,
+                "reflectance_offset": -0.2,
                 "qa_mask": {
                     "band": "QA_PIXEL",
                     "tests": [
@@ -232,7 +265,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "cadence": "seasonal",
         "categorical": False,
         "content": {
-            "NDBI": {"stats": ["sum", "mean", "min", "max", "std"], "default_stats": ["sum", "mean", "min", "max", "std"]},
+            "NDBI": {"stats": ["sum", "mean", "min", "max", "std", "variance"], "default_stats": ["sum", "mean", "min", "max", "std", "variance"]},
         },
         "label": "NDBI (Landsat 5 / 7 / 8)",
         "description": (
@@ -286,8 +319,8 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "categorical": False,
         "content": {
             "NDBI": {
-                "stats": ["sum", "mean", "min", "max", "std"],
-                "default_stats": ["sum", "mean", "min", "max", "std"],
+                "stats": ["sum", "mean", "min", "max", "std", "variance"],
+                "default_stats": ["sum", "mean", "min", "max", "std", "variance"],
             },
         },
         "label": "NDBI (MODIS Terra + Aqua)",

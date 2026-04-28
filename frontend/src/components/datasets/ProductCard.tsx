@@ -119,25 +119,25 @@ export default function ProductCard({ product }: Props) {
 
           {/* Date range */}
           {product.cadence === 'seasonal' ? (
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2">
               {([
                 { label: 'Start season', date: dateStart, onPick: (y: number, q: number) => onDateChange(seasonStart(y, q), dateEnd) },
                 { label: 'End season',   date: dateEnd,   onPick: (y: number, q: number) => onDateChange(dateStart, seasonEnd(y, q)) },
               ] as const).map(({ label, date, onPick }) => {
                 const { year, q } = dateToSeason(date)
                 return (
-                  <div key={label} className="flex-1">
+                  <div key={label}>
                     <p className="text-xs text-gray-500 mb-1">{label}</p>
                     <div className="flex gap-1">
                       <select
-                        className="input text-xs py-1 flex-1 min-w-0"
+                        className="input text-xs py-1 w-20 flex-shrink-0"
                         value={year}
                         onChange={(e) => onPick(Number(e.target.value), q)}
                       >
                         {years.map((y) => <option key={y} value={y}>{y}</option>)}
                       </select>
                       <select
-                        className="input text-xs py-1"
+                        className="input text-xs py-1 flex-1 min-w-0"
                         value={q}
                         onChange={(e) => onPick(year, Number(e.target.value))}
                       >

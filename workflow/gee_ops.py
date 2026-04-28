@@ -6,12 +6,6 @@ import ee
 from datetime import datetime, timedelta
 
 
-# Landsat Collection 2 Level-2 surface reflectance scale factors.
-# Applied before computing NDBI so the additive offset doesn't cancel incorrectly.
-# Source: https://www.usgs.gov/faqs/how-do-i-use-scale-factor-landsat-level-2-science-products
-_LS_SCALE  = 0.0000275
-_LS_OFFSET = -0.2
-
 
 def apply_qa_mask(img, qa_mask_cfg):
     """
@@ -108,7 +102,7 @@ def build_multi_ndbi_collection(multi_collections, start, end_dt, region=None):
 
         # Factory function captures sensor-specific values by value, avoiding
         # the Python closure-over-loop-variable bug.
-        def _make_to_ndbi(swir_b, nir_b, qa_b, tests, clear_mask):
+        def _make_to_ndbi(swir_b, nir_b, qa_b, tests, clear_mask, ref_scale, ref_offset):
             def _to_ndbi(img):
                 # Apply QA mask — fast path uses a single bitwiseAnd+eq (2 ops);
                 # fallback uses the pre-built per-test chain for complex configs.
@@ -127,8 +121,14 @@ def build_multi_ndbi_collection(multi_collections, start, end_dt, region=None):
 
                 # Stage 3 — Math Engine: normalizedDifference is a pre-compiled
                 # C++ atomic op on GEE servers; avoids subtract().divide() overhead.
-                swir_ref = img.select(swir_b).multiply(_LS_SCALE).add(_LS_OFFSET)
-                nir_ref  = img.select(nir_b).multiply(_LS_SCALE).add(_LS_OFFSET)
+                # Scale/offset only applied for sensors that store packed integers
+                # (e.g. Landsat C2 L2); MODIS bands are omitted from the sensor
+                # config and left as raw integers (the factor cancels in the ratio).
+                swir_ref = img.select(swir_b)
+                nir_ref  = img.select(nir_b)
+                if ref_scale is not None:
+                    swir_ref = swir_ref.multiply(ref_scale).add(ref_offset)
+                    nir_ref  = nir_ref.multiply(ref_scale).add(ref_offset)
                 ndbi = (
                     ee.Image([swir_ref, nir_ref])
                     .rename(["swir", "nir"])
@@ -139,7 +139,10 @@ def build_multi_ndbi_collection(multi_collections, start, end_dt, region=None):
             return _to_ndbi
 
         collection_list.append(
-            seg_col.map(_make_to_ndbi(sensor["swir_band"], sensor["nir_band"], qa_band, pre_built_tests, combined_clear_mask))
+            seg_col.map(_make_to_ndbi(
+                sensor["swir_band"], sensor["nir_band"], qa_band, pre_built_tests, combined_clear_mask,
+                sensor.get("reflectance_scale"), sensor.get("reflectance_offset"),
+            ))
         )
 
     if not collection_list:
@@ -164,7 +167,8 @@ def build_reducer(stat_name):
         "MAX":    ee.Reducer.max(),
         "MIN":    ee.Reducer.min(),
         "MEDIAN": ee.Reducer.median(),
-        "STD":    ee.Reducer.stdDev(),
+        "STD":      ee.Reducer.stdDev(),
+        "VARIANCE": ee.Reducer.variance(),
     }.get(stat_name.upper(), ee.Reducer.mean())
 
 
@@ -182,6 +186,50 @@ def build_compound_reducer(stats_list):
     for s in stats_list[1:]:
         base = base.combine(build_reducer(s), sharedInputs=True)
     return base
+
+
+# Stats where applying the same reducer twice (temporal then spatial) produces
+# a meaningless result.  For these, the spatial pass always uses mean so that
+# e.g. 'sum' yields mean per-pixel cumulative index (region-size-invariant)
+# rather than spatial-sum-of-temporal-sums (which scales with pixel count).
+# min/max compose correctly (min-of-mins = true overall min) so they are excluded.
+_DECOUPLE_SPATIAL_STATS = {"sum", "std", "variance"}
+
+
+def build_seasonal_stats(collection, regions, scale, stats_list, band, tile_scale=1):
+    """
+    Compute seasonal (quarterly) zonal statistics with decoupled temporal and
+    spatial reducers.
+
+    Temporal pass: stat-specific reducer collapses all scenes in the window
+    into one value per pixel.
+    Spatial pass: mean for sum/std/variance (so results are region-size-invariant);
+    same reducer as temporal for min/max/mean (they compose correctly).
+    """
+    join_filter = ee.Filter.equals(leftField='system:index', rightField='system:index')
+    joiner = ee.Join.saveFirst('_right')
+
+    def _reduce_stat(s):
+        temporal_reducer = build_reducer(s)
+        spatial_reducer  = ee.Reducer.mean() if s.lower() in _DECOUPLE_SPATIAL_STATS else temporal_reducer
+        band_name = f"{band}_{s.lower()}"
+        img = collection.reduce(temporal_reducer).rename([band_name])
+        return img.reduceRegions(
+            collection=regions,
+            reducer=spatial_reducer,
+            scale=scale,
+            tileScale=tile_scale,
+        )
+
+    result = _reduce_stat(stats_list[0])
+    for s in stats_list[1:]:
+        fc = _reduce_stat(s)
+        band_name = f"{band}_{s.lower()}"
+        joined = joiner.apply(result, fc, join_filter)
+        def _copy(f, bn=band_name):
+            return f.copyProperties(f.get('_right'), [bn])
+        result = joined.map(_copy)
+    return result
 
 
 def build_annual_stats(collection, regions, scale, stats_list, band, tile_scale=1):

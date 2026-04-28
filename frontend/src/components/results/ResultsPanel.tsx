@@ -210,7 +210,7 @@ export default function ResultsPanel({ runId }: Props) {
                 })()}
 
                 {/* Progress bar */}
-                {run.job_counts.total > 0 && (
+                {run.job_counts.total > 0 && run.status !== 'completed' && (
                   <div className="mt-2">
                     <div className="flex justify-between text-xs text-gray-500 mb-1">
                       <span>Chunks</span>

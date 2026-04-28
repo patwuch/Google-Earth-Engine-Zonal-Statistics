@@ -7,6 +7,7 @@ export default function DatasetConfig() {
   const { data: products = [], isLoading } = useQuery({
     queryKey: ['products'],
     queryFn: getProducts,
+    staleTime: Infinity,
   })
 
   if (isLoading) {

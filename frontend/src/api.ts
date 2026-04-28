@@ -130,44 +130,32 @@ export function partialDownloadUrl(runId: string, product: string): string {
   return `/api/runs/${runId}/download/${product}/partial`
 }
 
-export async function downloadPartialCheckoutCsv(runId: string, product: string): Promise<void> {
-  const url = `/api/runs/${runId}/download/${product}/partial-csv`
-  const res = await fetch(url)
-  if (!res.ok) {
-    if (res.status === 404) {
+async function _triggerFileDownload(url: string, fallbackFilename: string): Promise<void> {
+  // HEAD check preserves the 404-error UX without loading the body into JS memory.
+  // The actual download is handled natively by the browser via anchor navigation.
+  const check = await fetch(url, { method: 'HEAD' })
+  if (!check.ok) {
+    if (check.status === 404) {
       throw new Error('No partial data yet — click "Build Partial Checkout" first, then wait a moment')
     }
-    throw new Error(`Download failed (${res.status})`)
+    throw new Error(`Download failed (${check.status})`)
   }
-  const blob = await res.blob()
-  const disposition = res.headers.get('content-disposition') ?? ''
-  const match = disposition.match(/filename="([^"]+)"/)
-  const filename = match ? match[1] : `${product}_partial.csv`
-  const objUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = objUrl
-  a.download = filename
+  a.href = url
+  a.download = fallbackFilename
   a.click()
-  URL.revokeObjectURL(objUrl)
 }
 
-export async function downloadPartialCheckout(runId: string, product: string): Promise<void> {
-  const url = partialDownloadUrl(runId, product)
-  const res = await fetch(url)
-  if (!res.ok) {
-    if (res.status === 404) {
-      throw new Error('No partial data yet — click "Build Partial Checkout" first, then wait a moment')
-    }
-    throw new Error(`Download failed (${res.status})`)
-  }
-  const blob = await res.blob()
-  const disposition = res.headers.get('content-disposition') ?? ''
-  const match = disposition.match(/filename="([^"]+)"/)
-  const filename = match ? match[1] : `${product}_partial.parquet`
-  const objUrl = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = objUrl
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(objUrl)
+export function downloadPartialCheckoutCsv(runId: string, product: string): Promise<void> {
+  return _triggerFileDownload(
+    `/api/runs/${runId}/download/${product}/partial-csv`,
+    `${product}_partial.csv`,
+  )
+}
+
+export function downloadPartialCheckout(runId: string, product: string): Promise<void> {
+  return _triggerFileDownload(
+    partialDownloadUrl(runId, product),
+    `${product}_partial.parquet`,
+  )
 }

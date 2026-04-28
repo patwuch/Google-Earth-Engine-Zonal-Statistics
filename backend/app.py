@@ -286,7 +286,8 @@ def _save_yaml(run_id: str, record: dict):
 def _update_registry(run_id: str, payload: dict, status: str,
                      config_hash: str | None = None,
                      error_message: str | None = None,
-                     bump_attempt: bool = False):
+                     bump_attempt: bool = False,
+                     clear_pid: bool = False):
     now      = datetime.now(timezone.utc).isoformat()
     existing = _load_yaml(run_id) or {}
     attempts = existing.get("attempts", 0)
@@ -305,7 +306,10 @@ def _update_registry(run_id: str, payload: dict, status: str,
         # Clear the old PID when transitioning to running so that _resolve_status
         # doesn't see the dead PID from a previous attempt and immediately flip
         # the status back to failed before _set_execution_meta writes the new PID.
-        "snakemake_pid":        None if status == "running" else existing.get("snakemake_pid"),
+        # Also cleared on Windows pause (clear_pid=True) because the process is
+        # killed outright — _resolve_status uses pid=None to distinguish an
+        # intentional Windows pause from an unexpected crash.
+        "snakemake_pid":        None if (status == "running" or clear_pid) else existing.get("snakemake_pid"),
         "snakemake_log_path":   existing.get("snakemake_log_path"),
         "snakemake_config_path":existing.get("snakemake_config_path"),
         "snakefile":            existing.get("snakefile", str(SNAKEFILE)),
@@ -577,6 +581,10 @@ def _resolve_status(meta: dict | None) -> str:
     status = meta.get("status", "unknown")
     if status == "paused":
         pid = meta.get("snakemake_pid")
+        if pid is None:
+            # Windows pause intentionally kills the process and clears the PID.
+            # A None PID here means the pause was deliberate, not a crash.
+            return "paused"
         if not _is_pid_alive(pid):
             run_id = meta.get("run_id")
             if run_id:
@@ -853,8 +861,7 @@ async def upload_gee_key(file: UploadFile = File(...)):
 
 # ─── Routes: Products ─────────────────────────────────────────────────────────
 
-@app.get("/api/products")
-def get_products():
+def _build_products_response() -> list:
     result = []
     for pid, info in PRODUCT_REGISTRY.items():
         bands = [
@@ -874,6 +881,12 @@ def get_products():
             "supported_stats": sorted({s for b in info["content"].values() for s in b["stats"]}),
         })
     return result
+
+_PRODUCTS_RESPONSE: list = _build_products_response()
+
+@app.get("/api/products")
+def get_products():
+    return _PRODUCTS_RESPONSE
 
 # ─── Routes: Runs ─────────────────────────────────────────────────────────────
 
@@ -954,7 +967,8 @@ def submit_run(body: SubmitRunRequest):
             "scale":            info["scale"],
             "resolution_m":     info.get("resolution_m", info["scale"]),
             "cadence":          cadence,
-            "categorical":      info["categorical"],
+            "categorical":         info["categorical"],
+            "normalize_histogram": info.get("normalize_histogram", False),
             "start_date":       pc.date_start,
             "end_date":         dt_end.strftime("%Y-%m-%d"),
             "time_chunks":      time_chunks,
@@ -963,6 +977,16 @@ def submit_run(body: SubmitRunRequest):
             # Per-band QA bit-mask configs (None for bands/products with no masking).
             "band_masks":       {
                 band: info.get("content", {}).get(band, {}).get("qa_mask")
+                for band in pc.bands
+            },
+            # Per-band unit transforms applied before reduction (e.g. Kelvin → Celsius).
+            "band_transforms":  {
+                band: info.get("content", {}).get(band, {}).get("band_transform")
+                for band in pc.bands
+            },
+            # Per-band derived-band compute specs (e.g. LST_Mean from Day + Night).
+            "band_computes":    {
+                band: info.get("content", {}).get(band, {}).get("band_compute")
                 for band in pc.bands
             },
         }
@@ -1038,7 +1062,7 @@ def pause_run(run_id: str):
             _signal_process_tree(int(pid), signal.SIGSTOP)
 
     payload = meta.get("payload", {})
-    _update_registry(run_id, payload, status="paused")
+    _update_registry(run_id, payload, status="paused", clear_pid=(sys.platform == "win32"))
     return {"ok": True}
 
 
@@ -1159,9 +1183,20 @@ def get_run_log(run_id: str, lines: int = 100):
     log_path = RUNS_DIR / run_id / "logs" / "snakemake_run.log"
     if not log_path.exists():
         return {"lines": []}
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        tail = f.readlines()[-lines:]
-    return {"lines": [l.rstrip("\n") for l in tail]}
+    with open(log_path, "rb") as f:
+        # Read only the last chunk needed rather than loading the whole file.
+        chunk_size = lines * 200  # ~200 bytes per line on average
+        f.seek(0, 2)
+        file_size = f.tell()
+        f.seek(max(0, file_size - chunk_size))
+        raw = f.read().decode("utf-8", errors="replace")
+    all_lines = raw.splitlines()
+    tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+    # If we seeked mid-file the first element may be a partial line; drop it only
+    # when we didn't read from the start.
+    if file_size > chunk_size and len(all_lines) > lines:
+        tail = all_lines[1:][-lines:]
+    return {"lines": tail}
 
 @app.post("/api/runs/{run_id}/partial")
 def trigger_partial(run_id: str):
@@ -1309,8 +1344,8 @@ def download_csv(run_id: str, product: str):
 
     with duckdb.connect(":memory:") as conn:
         conn.execute(
-            f"COPY (SELECT {cols_sql} FROM read_parquet('{path}')) "
-            f"TO '{tmp_path}' (HEADER, DELIMITER ',')"
+            f"COPY (SELECT {cols_sql} FROM read_parquet('{path.as_posix()}')) "
+            f"TO '{Path(tmp_path).as_posix()}' (HEADER, DELIMITER ',')"
         )
 
     return FileResponse(
@@ -1341,8 +1376,8 @@ def download_partial_csv(run_id: str, product: str):
 
     with duckdb.connect(":memory:") as conn:
         conn.execute(
-            f"COPY (SELECT {cols_sql} FROM read_parquet('{path}')) "
-            f"TO '{tmp_path}' (HEADER, DELIMITER ',')"
+            f"COPY (SELECT {cols_sql} FROM read_parquet('{path.as_posix()}')) "
+            f"TO '{Path(tmp_path).as_posix()}' (HEADER, DELIMITER ',')"
         )
 
     return FileResponse(

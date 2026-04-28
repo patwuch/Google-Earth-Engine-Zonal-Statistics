@@ -1,20 +1,23 @@
 import { useEffect, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getRunLog } from '@/api'
 import { useAppStore } from '@/store'
 import HelpTooltip from '@/components/ui/HelpTooltip'
+import type { RunDetail } from '@/types'
 
 interface Props {
   runId: string
 }
 
 export default function SnakemakeLog({ runId }: Props) {
+  const queryClient = useQueryClient()
   const { data: lines = [], isLoading } = useQuery({
     queryKey: ['run-log', runId],
     queryFn:  () => getRunLog(runId, 200),
-    refetchInterval: (query) => {
-      // Poll while the run is active — parent will unmount us otherwise
-      return 3_000
+    refetchInterval: () => {
+      const run = queryClient.getQueryData<RunDetail>(['run', runId])
+      if (run?.status === 'running' || run?.status === 'paused' || run == null) return 3_000
+      return false
     },
   })
 

@@ -36,6 +36,11 @@ def sql_quote_ident(identifier: str) -> str:
     return '"' + str(identifier).replace('"', '""') + '"'
 
 
+def _sql_path(p) -> str:
+    """Return a forward-slash path string safe for embedding in DuckDB SQL literals."""
+    return str(p).replace("\\", "/")
+
+
 def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
     """Merge chunk parquet files into one parquet file.
 
@@ -57,7 +62,7 @@ def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
             except Exception:
                 _mem_gb = 4
             conn.execute(f"SET memory_limit='{_mem_gb}GB'")
-        conn.execute(f"SET temp_directory='{tempfile.gettempdir()}'")
+        conn.execute(f"SET temp_directory='{_sql_path(tempfile.gettempdir())}'")
         try:
             conn.execute("LOAD spatial;")
         except Exception:
@@ -70,7 +75,7 @@ def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
         # Lazy reference — DuckDB streams on demand; nothing is loaded yet.
         # union_by_name=true handles schema differences between chunks (NULL-fills
         # missing columns) without requiring manual NULL-padding.
-        file_list_sql = "[" + ", ".join(f"'{f}'" for f in chunk_files) + "]"
+        file_list_sql = "[" + ", ".join(f"'{_sql_path(f)}'" for f in chunk_files) + "]"
         src = f"read_parquet({file_list_sql}, union_by_name=true)"
 
         # Schema from file metadata only — no row data loaded.

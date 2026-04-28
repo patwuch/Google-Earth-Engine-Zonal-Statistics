@@ -15,9 +15,16 @@ def log_progress(message, log_file=None, quiet=False):
     if not quiet:
         print(f"[{timestamp}] {message}")
     if log_file:
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] {message}\n")
+
+def _sql_path(p) -> str:
+    """Return a forward-slash path string safe for embedding in DuckDB SQL literals."""
+    return str(p).replace("\\", "/")
+
 
 def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=None, log_file=None, quiet=False, threads=None):
     def _log(message):
@@ -39,7 +46,7 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
             except Exception:
                 _mem_gb = 4
             conn.execute(f"SET memory_limit='{_mem_gb}GB'")
-        conn.execute(f"SET temp_directory='{tempfile.gettempdir()}'")
+        conn.execute(f"SET temp_directory='{_sql_path(tempfile.gettempdir())}'")
         if threads is not None:
             conn.execute(f"SET threads={int(threads)}")
         try:
@@ -51,7 +58,7 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
         total = len(chunk_files)
         _log(f"Merging {total} chunk(s) ({merge_strategy} strategy)...")
 
-        file_list_sql = "[" + ", ".join(f"'{f}'" for f in chunk_files) + "]"
+        file_list_sql = "[" + ", ".join(f"'{_sql_path(f)}'" for f in chunk_files) + "]"
         src = f"read_parquet({file_list_sql}, union_by_name=true)"
 
         # Schema from file metadata only — no data loaded
@@ -104,9 +111,10 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
             query += f" ORDER BY {sort_clause}"
 
         _log(f"Writing final GeoParquet: {output_path}")
+        output_path_sql = _sql_path(output_path)
         conn.execute(f"""
             COPY ({query})
-            TO '{output_path}'
+            TO '{output_path_sql}'
             (FORMAT PARQUET, COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000)
         """)
 
@@ -114,7 +122,7 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
             raise RuntimeError(f"Merged parquet file not created: {output_path}")
 
         file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-        row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_path}')").fetchone()[0]
+        row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_path_sql}')").fetchone()[0]
         _log(f"✓ Merge successful: {output_path} ({file_size_mb:.2f} MB, {row_count} rows)")
 
         return True
