@@ -1,5 +1,7 @@
+import type { ReactNode } from 'react'
+
 interface Props {
-  text: string
+  text: ReactNode
   direction?: 'above' | 'below' | 'right'
 }
 

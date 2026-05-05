@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime
 
 import geopandas as gpd
+from shapely.ops import transform
 
 try:
     LOG_FILE = snakemake.log[0] if snakemake.log else "preprocess_aoi.log"
@@ -154,6 +155,18 @@ log_progress(
 # Reproject back to 4326 — everything downstream (GEE upload, chunk workers)
 # continues to receive WGS84 geometries exactly as before.
 gdf = simplified.to_crs("EPSG:4326")
+
+# Repair any self-intersections introduced by simplify()+to_crs().
+# buffer(0) is a no-op for valid polygons; for self-intersecting ones it
+# resolves crossings so ee.Geometry() accepts them.
+gdf["geometry"] = gdf.geometry.buffer(0)
+gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notna()]
+
+# Strip Z coordinates — ee.Geometry() only accepts 2D (lon, lat) pairs
+if gdf.geometry.has_z.any():
+    gdf["geometry"] = gdf.geometry.apply(
+        lambda g: transform(lambda x, y, z=None: (x, y), g) if g.has_z else g
+    )
 
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 gdf.to_parquet(out_path)

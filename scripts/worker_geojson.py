@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 import re
 import uuid
+from shapely.ops import unary_union, transform
+from shapely.geometry import GeometryCollection
 import tempfile
 import ee
 import geemap
@@ -25,6 +27,7 @@ from workflow.gee_ops import (
     build_seasonal_stats,
     build_annual_stats,
     build_histogram_stats,
+    build_daily_histogram_stats,
 )
 import geopandas as gpd
 import pandas as pd
@@ -93,19 +96,61 @@ def _split_attrs(gdf):
 
 
 
+def _coerce_to_polygon(geom):
+    """
+    Return a Polygon/MultiPolygon from geom, or None if nothing usable remains.
+    Handles GeometryCollection (from simplify+reproject) and self-intersecting
+    polygons (rejected by ee.Geometry). buffer(0) itself can also return a
+    GeometryCollection, so we extract polygon parts from the result too.
+    """
+    if geom is None or geom.is_empty:
+        return None
+
+    # Step 1 — extract polygon parts if input is a collection
+    if geom.geom_type not in ("Polygon", "MultiPolygon"):
+        if not hasattr(geom, 'geoms'):
+            return None
+        geom = unary_union([g for g in geom.geoms if g.geom_type in ("Polygon", "MultiPolygon")])
+        if geom is None or geom.is_empty:
+            return None
+
+    # Step 2 — repair topology; buffer(0) can itself return a GeometryCollection
+    fixed = geom.buffer(0)
+    if fixed is None or fixed.is_empty:
+        return None
+    if fixed.geom_type not in ("Polygon", "MultiPolygon"):
+        if not hasattr(fixed, 'geoms'):
+            return None
+        fixed = unary_union([g for g in fixed.geoms if g.geom_type in ("Polygon", "MultiPolygon")])
+        if fixed is None or fixed.is_empty:
+            return None
+
+    if fixed.geom_type not in ("Polygon", "MultiPolygon"):
+        return None
+
+    # Step 3 — strip Z coordinates; ee.Geometry() requires 2D (lon, lat) pairs
+    # and rejects triplets because len((x, y, z)) == 3 is odd
+    if fixed.has_z:
+        fixed = transform(lambda x, y, z=None: (x, y), fixed)
+
+    return fixed
+
+
 def _gdf_to_ee(gdf_slim):
     """
     Convert a slim GeoDataFrame (geometry + region_id) to an EE FeatureCollection.
     Uses __geo_interface__ directly — avoids shapefile roundtrip which truncates
     column names to 10 chars and drops unsupported geometry types.
     """
-    features = [
-        ee.Feature(
-            ee.Geometry(row.geometry.__geo_interface__),
+    features = []
+    for _, row in gdf_slim.iterrows():
+        geom = _coerce_to_polygon(row.geometry)
+        if geom is None:
+            continue
+        features.append(ee.Feature(
+            ee.Geometry(geom.__geo_interface__),
             {"region_id": str(row["region_id"])}
-        )
-        for _, row in gdf_slim.iterrows()
-    ]
+        ))
     return ee.FeatureCollection(features)
 
 def log_progress(message):
@@ -153,6 +198,28 @@ def _write_shelved_event(prod: str, band: str, chunk: str, count: int):
                 """INSERT INTO run_events
                        (event_time, run_id, event_type, status, message, payload_json)
                    VALUES (?, ?, 'job_shelved', 'job_shelved', ?, ?)""",
+                [now, run_id, msg, payload],
+            )
+    except Exception:
+        pass
+
+
+def _write_empty_chunk_event(prod: str, band: str, chunk: str, collection_id: str):
+    """Write an empty_chunk event to run_events when no GEE images were found."""
+    run_id  = os.getenv("GEE_RUN_ID")
+    db_path = os.getenv("GEE_DB_PATH")
+    if not run_id or not db_path:
+        return
+    try:
+        import duckdb
+        payload = json.dumps({"prod": prod, "band": band, "chunk": chunk, "collection": collection_id})
+        msg = f"Empty chunk {prod}/{band} [{chunk}] — no images found in {collection_id}"
+        now = datetime.now(timezone.utc).isoformat()
+        with duckdb.connect(db_path) as conn:
+            conn.execute(
+                """INSERT INTO run_events
+                       (event_time, run_id, event_type, status, message, payload_json)
+                   VALUES (?, ?, 'empty_chunk', 'empty_chunk', ?, ?)""",
                 [now, run_id, msg, payload],
             )
     except Exception:
@@ -454,6 +521,7 @@ try:
         with open(out, 'w') as f:
             json.dump({"type": "FeatureCollection", "features": empty_features}, f)
         log_progress(f"Wrote empty GeoJSON to {out}")
+        _write_empty_chunk_event(prod, band, time_chunk, col_id or "")
         sys.exit(0)
 
     # GEE property naming:
@@ -469,7 +537,10 @@ try:
 
     def _do_export(regions_fc, max_retries):
         if categorical:
-            stats_fc = build_histogram_stats(collection, regions_fc, scale, band)
+            if cadence in ("daily", "composite"):
+                stats_fc = build_daily_histogram_stats(collection, regions_fc, scale, band, tile_scale)
+            else:
+                stats_fc = build_histogram_stats(collection, regions_fc, scale, band)
             # GEE names the histogram output property after the band; rename to {band}_histogram
             hist_rename = {band: f"{band}_histogram"}
             return export_to_geojson(
@@ -512,16 +583,26 @@ try:
     success = _do_export(regions, max_retries=3)
 
     if not success:
-        # Geometry was supposed to be already under the coord budget, so failure is likely a transient
-        # GEE error or an edge case where our estimate was insufficient.
-        # Apply one emergency simplification step at the maximum tolerance and retry once.
-        emergency_tol = _SIMPLIFY_LADDER[-1]
-        log_progress(f"Export failed — applying emergency simplification (tolerance={emergency_tol})")
-        gdf_emergency = gdf_slim.copy()
-        gdf_emergency["geometry"] = gdf_slim.geometry.simplify(emergency_tol, preserve_topology=True)
-        gdf_emergency = gdf_emergency[~gdf_emergency.geometry.is_empty & gdf_emergency.geometry.notna()]
-        regions_emergency = _gdf_to_ee(gdf_emergency)
-        success = _do_export(regions_emergency, max_retries=1)
+        # Pre-simplification is designed to keep geometry under the GEE payload budget,
+        # so failure here is assumed to be a slight budget miss rather than a severe
+        # overrun. Walk the simplification ladder starting from the first rung above
+        # the pre-processing tolerance (converting m → degrees at equatorial scale),
+        # applying the minimum additional simplification needed rather than jumping
+        # straight to the coarsest tolerance.
+        _preprocess_tol_deg = preprocess_tol_m / 111_000
+        emergency_rungs = [t for t in _SIMPLIFY_LADDER if t > _preprocess_tol_deg] or _SIMPLIFY_LADDER
+        for emergency_tol in emergency_rungs:
+            log_progress(
+                f"Export failed — emergency simplification at {emergency_tol}° "
+                f"(preprocess was ~{_preprocess_tol_deg:.5f}°)"
+            )
+            gdf_emergency = gdf_slim.copy()
+            gdf_emergency["geometry"] = gdf_slim.geometry.simplify(emergency_tol, preserve_topology=True)
+            gdf_emergency = gdf_emergency[~gdf_emergency.geometry.is_empty & gdf_emergency.geometry.notna()]
+            regions_emergency = _gdf_to_ee(gdf_emergency)
+            success = _do_export(regions_emergency, max_retries=1)
+            if success:
+                break
 
     if not success:
         raise RuntimeError(

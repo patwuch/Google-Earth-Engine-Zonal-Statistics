@@ -57,11 +57,17 @@ export default function ProductCard({ product }: Props) {
     if (enabled) syncStore(selectedBands, selectedStats, start, end)
   }
 
-  const cadenceLabel: Record<string, string> = {
-    daily:    'Daily → monthly chunks',
-    composite:'Composite → quarterly chunks',
-    seasonal: 'Seasonal → one value per quarter',
-    annual:   'Annual chunks',
+  const cadenceDesc: Record<string, string> = {
+    daily:    'Daily',
+    composite:'8-day composite',
+    seasonal: 'Seasonal',
+    annual:   'Annual',
+  }
+  const chunkDesc: Record<string, string> = {
+    daily:    'One month',
+    composite:'One quarter',
+    seasonal: 'One quarter',
+    annual:   'One year',
   }
 
   const QUARTERS = [
@@ -220,7 +226,7 @@ export default function ProductCard({ product }: Props) {
 
           {/* Meta */}
           <p className="text-xs text-gray-400">
-            {product.resolution_m}m · {cadenceLabel[product.cadence] ?? product.cadence}
+            {product.resolution_m}m · Cadence: {cadenceDesc[product.cadence] ?? product.cadence} · Chunk: {chunkDesc[product.cadence] ?? '—'}
           </p>
         </div>
       )}

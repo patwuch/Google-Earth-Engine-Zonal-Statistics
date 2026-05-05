@@ -11,25 +11,32 @@ import sys
 import re
 import json
 import tempfile
+import time
 import duckdb
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-def _log_event(runs_dir: Path, run_id: str, message: str):
+def _log_event(runs_dir: Path, run_id: str, message: str, event_type: str = "info"):
     db_path = runs_dir / "run_state.duckdb"
     if not db_path.exists():
         return
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        with duckdb.connect(str(db_path)) as conn:
-            conn.execute(
-                """INSERT INTO run_events (event_time, run_id, event_type, status, message, payload_json)
-                   VALUES (?, ?, 'info', 'info', ?, ?)""",
-                [now, run_id, message, json.dumps({})],
-            )
-    except Exception:
-        pass
+    now = datetime.now(timezone.utc).isoformat()
+    for attempt in range(8):
+        try:
+            with duckdb.connect(str(db_path)) as conn:
+                conn.execute(
+                    """INSERT INTO run_events (event_time, run_id, event_type, status, message, payload_json)
+                       VALUES (?, ?, ?, 'info', ?, ?)""",
+                    [now, run_id, event_type, message, json.dumps({})],
+                )
+            return
+        except duckdb.IOException as e:
+            if "lock" not in str(e).lower():
+                return
+            time.sleep(0.25 * (attempt + 1))
+        except Exception:
+            return
 
 
 def sql_quote_ident(identifier: str) -> str:
@@ -41,7 +48,7 @@ def _sql_path(p) -> str:
     return str(p).replace("\\", "/")
 
 
-def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
+def merge_parquet_chunks_to_output(chunk_files, output_file: Path, aoi_path: Path = None):
     """Merge chunk parquet files into one parquet file.
 
     Uses lazy read_parquet() references so no chunk data is loaded into memory
@@ -54,15 +61,16 @@ def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
     conn = duckdb.connect(":memory:")
     try:
         try:
-            conn.execute("SET memory_limit='75%'")
+            conn.execute("SET memory_limit='60%'")
         except Exception:
             try:
                 import psutil
-                _mem_gb = max(1, int(psutil.virtual_memory().total * 0.75 / 1024 ** 3))
+                _mem_gb = max(1, int(psutil.virtual_memory().total * 0.60 / 1024 ** 3))
             except Exception:
                 _mem_gb = 4
             conn.execute(f"SET memory_limit='{_mem_gb}GB'")
         conn.execute(f"SET temp_directory='{_sql_path(tempfile.gettempdir())}'")
+        conn.execute("SET preserve_insertion_order=false")
         try:
             conn.execute("LOAD spatial;")
         except Exception:
@@ -95,7 +103,7 @@ def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
                 if c in join_keys:
                     select_parts.append(q)
                 elif "GEOMETRY" in col_types.get(c, ""):
-                    select_parts.append(f"ANY_VALUE({q}) AS {q}")
+                    continue  # geometry joined from AOI at write step
                 else:
                     select_parts.append(f"MAX({q}) AS {q}")
             group_clause = ", ".join(sql_quote_ident(k) for k in join_keys)
@@ -107,9 +115,19 @@ def merge_parquet_chunks_to_output(chunk_files, output_file: Path):
             sort_clause = ", ".join(sql_quote_ident(c) for c in sort_cols)
             query += f" ORDER BY {sort_clause}"
 
+        if aoi_path and aoi_path.exists():
+            aoi_sql = _sql_path(aoi_path)
+            copy_query = (
+                f"SELECT p.*, a.geometry"
+                f" FROM ({query}) p"
+                f" LEFT JOIN (SELECT region_id, geometry FROM read_parquet('{aoi_sql}')) a"
+                f" USING (region_id)"
+            )
+        else:
+            copy_query = query
         output_file.parent.mkdir(parents=True, exist_ok=True)
         conn.execute(
-            f"COPY ({query}) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)",
+            f"COPY ({copy_query}) TO ? (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)",
             [str(output_file)],
         )
         return output_file.exists()
@@ -123,6 +141,7 @@ def build_partial_checkout_files_parquet(run_id: str, runs_dir: Path):
     results = runs_dir / run_id / "results"
     run_chunk_root = intermediate / "chunks"
     partial_root = results / "partial_checkout"
+    aoi_path = intermediate / "aoi_prepped.parquet"
 
     if not run_chunk_root.exists():
         return []
@@ -157,9 +176,13 @@ def build_partial_checkout_files_parquet(run_id: str, runs_dir: Path):
             continue
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        if merge_parquet_chunks_to_output(band_chunk_files, output_file):
+        _log_event(runs_dir, run_id, f"Started building partial output to: {output_file.name}", event_type="partial_start")
+        if merge_parquet_chunks_to_output(band_chunk_files, output_file, aoi_path):
             merged_files.append(output_file)
-            _log_event(runs_dir, run_id, f"Build partial output to: {output_file.name}")
+            for stale in output_dir.glob("*.parquet"):
+                if stale != output_file:
+                    stale.unlink(missing_ok=True)
+            _log_event(runs_dir, run_id, f"Finished building partial output to: {output_file.name}", event_type="partial_done")
 
     return sorted(merged_files)
 

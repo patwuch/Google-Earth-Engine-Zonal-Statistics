@@ -314,3 +314,23 @@ def build_histogram_stats(collection, regions, scale, band):
         reducer=ee.Reducer.frequencyHistogram(),
         scale=scale,
     )
+
+
+def build_daily_histogram_stats(collection, regions, scale, band, tile_scale=1):
+    """
+    Compute per-class pixel counts for each image in a daily/composite categorical
+    collection. One row per region per image date, tagged with a 'Date' property.
+
+    Use instead of build_histogram_stats when the collection contains multiple
+    images (daily or composite cadence) — mosaic would silently discard all but
+    the first image per pixel location.
+    """
+    def reduce_image(img):
+        date_str = img.date().format("YYYY-MM-dd")
+        return img.select([band]).reduceRegions(
+            collection=regions,
+            reducer=ee.Reducer.frequencyHistogram(),
+            scale=scale,
+            tileScale=tile_scale,
+        ).map(lambda f: f.set("Date", date_str))
+    return collection.map(reduce_image).flatten()

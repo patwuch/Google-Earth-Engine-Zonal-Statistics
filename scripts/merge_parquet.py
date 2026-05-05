@@ -26,7 +26,7 @@ def _sql_path(p) -> str:
     return str(p).replace("\\", "/")
 
 
-def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=None, log_file=None, quiet=False, threads=None):
+def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=None, log_file=None, quiet=False, threads=None, aoi_path=None):
     def _log(message):
         log_progress(message, log_file, quiet)
 
@@ -37,16 +37,17 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
     conn = duckdb.connect(":memory:")
     try:
         try:
-            conn.execute("SET memory_limit='75%'")
+            conn.execute("SET memory_limit='60%'")
         except Exception:
-            # Percentage notation requires DuckDB ≥ 0.10; compute 75% of total RAM directly.
+            # Percentage notation requires DuckDB ≥ 0.10; compute 60% of total RAM directly.
             try:
                 import psutil
-                _mem_gb = max(1, int(psutil.virtual_memory().total * 0.75 / 1024 ** 3))
+                _mem_gb = max(1, int(psutil.virtual_memory().total * 0.60 / 1024 ** 3))
             except Exception:
                 _mem_gb = 4
             conn.execute(f"SET memory_limit='{_mem_gb}GB'")
         conn.execute(f"SET temp_directory='{_sql_path(tempfile.gettempdir())}'")
+        conn.execute("SET preserve_insertion_order=false")
         if threads is not None:
             conn.execute(f"SET threads={int(threads)}")
         try:
@@ -83,7 +84,7 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
                     if col_name in join_keys:
                         select_parts.append(q)
                     elif 'GEOMETRY' in col_type.upper():
-                        select_parts.append(f'ANY_VALUE({q}) AS {q}')
+                        continue  # geometry joined from AOI at write step
                     else:
                         select_parts.append(f'MAX({q}) AS {q}')
                 group_clause = ', '.join(f'"{k}"' for k in join_keys)
@@ -112,8 +113,18 @@ def merge_parquet_chunks(chunk_files, output_path, merge_strategy="wide", band=N
 
         _log(f"Writing final GeoParquet: {output_path}")
         output_path_sql = _sql_path(output_path)
+        if merge_strategy == "wide" and aoi_path and os.path.exists(aoi_path):
+            aoi_path_sql = _sql_path(aoi_path)
+            copy_query = (
+                f"SELECT p.*, a.geometry"
+                f" FROM ({query}) p"
+                f" LEFT JOIN (SELECT region_id, geometry FROM read_parquet('{aoi_path_sql}')) a"
+                f" USING (region_id)"
+            )
+        else:
+            copy_query = query
         conn.execute(f"""
-            COPY ({query})
+            COPY ({copy_query})
             TO '{output_path_sql}'
             (FORMAT PARQUET, COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000)
         """)
@@ -144,6 +155,7 @@ if __name__ == "__main__":
         band = snakemake.params.get("band", None)
         quiet = True
         threads = getattr(snakemake, "threads", None)
+        aoi_path = getattr(snakemake.input, "aoi", None)
     except NameError:
         # CLI mode
         if len(sys.argv) < 3:
@@ -156,9 +168,10 @@ if __name__ == "__main__":
         band = None
         quiet = False
         threads = None
+        aoi_path = None
 
     try:
-        merge_parquet_chunks(chunk_files, output_path, merge_strategy, band, log_file, quiet, threads)
+        merge_parquet_chunks(chunk_files, output_path, merge_strategy, band, log_file, quiet, threads, aoi_path)
         sys.exit(0)
     except Exception as e:
         print(f"FATAL ERROR: {str(e)}", file=sys.stderr)

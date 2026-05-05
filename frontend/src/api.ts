@@ -131,19 +131,25 @@ export function partialDownloadUrl(runId: string, product: string): string {
 }
 
 async function _triggerFileDownload(url: string, fallbackFilename: string): Promise<void> {
-  // HEAD check preserves the 404-error UX without loading the body into JS memory.
-  // The actual download is handled natively by the browser via anchor navigation.
-  const check = await fetch(url, { method: 'HEAD' })
-  if (!check.ok) {
-    if (check.status === 404) {
+  // FastAPI GET routes don't handle HEAD, so use a blob GET instead.
+  // Strip /api prefix because http already has baseURL '/api'.
+  const path = url.startsWith('/api/') ? url.slice('/api'.length) : url
+  let blob: Blob
+  try {
+    const { data } = await http.get<Blob>(path, { responseType: 'blob' })
+    blob = data
+  } catch (err: any) {
+    if (err.response?.status === 404) {
       throw new Error('No partial data yet — click "Build Partial Checkout" first, then wait a moment')
     }
-    throw new Error(`Download failed (${check.status})`)
+    throw new Error(`Download failed (${err.response?.status ?? 'network error'})`)
   }
+  const objectUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url
+  a.href = objectUrl
   a.download = fallbackFilename
   a.click()
+  URL.revokeObjectURL(objectUrl)
 }
 
 export function downloadPartialCheckoutCsv(runId: string, product: string): Promise<void> {

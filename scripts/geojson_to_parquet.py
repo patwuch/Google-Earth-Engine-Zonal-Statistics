@@ -76,23 +76,26 @@ def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
 
         # Collapse duplicate (region_id, Date) rows that arise when multiple
         # Landsat path/row tiles cover the same AOI region on the same date.
-        # AVG on numeric columns gives the correct mean across overlapping scenes;
-        # geometry is identical for all rows of the same region so ANY_VALUE is exact.
-        # For products with no scene overlap this GROUP BY is a no-op.
+        # AVG on numeric columns gives the correct mean across overlapping scenes.
+        # Geometry is stripped here — it is joined from aoi_prepped.parquet at the
+        # final merge step, which avoids duplicating it across every chunk file.
         group_keys = [c for c in column_names if c in ('region_id', 'Date')]
+        select_parts = []
+        for col in columns:
+            name, dtype = col[1], col[2].upper()
+            if 'GEOMETRY' in dtype:
+                continue
+            elif name in group_keys:
+                select_parts.append(f'"{name}"')
+            elif group_keys and any(t in dtype for t in ('FLOAT', 'DOUBLE', 'REAL', 'INT', 'DECIMAL',
+                                           'NUMERIC', 'BIGINT', 'SMALLINT', 'TINYINT', 'HUGEINT')):
+                select_parts.append(f'AVG("{name}") AS "{name}"')
+            elif group_keys:
+                select_parts.append(f'ANY_VALUE("{name}") AS "{name}"')
+            else:
+                select_parts.append(f'"{name}"')
+
         if group_keys:
-            select_parts = []
-            for col in columns:
-                name, dtype = col[1], col[2].upper()
-                if name in group_keys:
-                    select_parts.append(f'"{name}"')
-                elif 'GEOMETRY' in dtype:
-                    select_parts.append(f'ANY_VALUE("{name}") AS "{name}"')
-                elif any(t in dtype for t in ('FLOAT', 'DOUBLE', 'REAL', 'INT', 'DECIMAL',
-                                               'NUMERIC', 'BIGINT', 'SMALLINT', 'TINYINT', 'HUGEINT')):
-                    select_parts.append(f'AVG("{name}") AS "{name}"')
-                else:
-                    select_parts.append(f'ANY_VALUE("{name}") AS "{name}"')
             group_clause = ', '.join(f'"{k}"' for k in group_keys)
             conn.execute(
                 f"CREATE TABLE deduped AS SELECT {', '.join(select_parts)} "
@@ -104,9 +107,11 @@ def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
                     f"Deduplicated {row_count} → {deduped_count} rows "
                     f"(same-date scene overlap collapsed)", log_file
                 )
-            export_table = "deduped"
         else:
-            export_table = "geojson_data"
+            conn.execute(
+                f"CREATE TABLE deduped AS SELECT {', '.join(select_parts)} FROM geojson_data"
+            )
+        export_table = "deduped"
 
         # Write to Parquet with compression
         log_progress(f"Writing GeoParquet: {parquet_path}", log_file)

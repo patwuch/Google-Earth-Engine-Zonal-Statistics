@@ -32,15 +32,18 @@ SHP = config.get("shp_path", "")
 RUN_ID = config.get("run_id", "default")
 APP_DIR = config.get("app_dir", "/app")
 ID_COLUMN = config.get("id_column", "")
-_gee_slots    = int(config.get("gee_concurrency", 10))
-_num_products = max(1, len(PRODUCTS))
+_gee_slots  = int(config.get("gee_concurrency", 10))
 # Max gee_weight across selected products — determines true concurrent chunk limit.
-# A product with gee_weight=5 can only run floor(10/5)=2 chunks at once, so unlocking
-# 10 chunks via the chain window would let Snakemake schedule out-of-order.
-_max_weight   = max((p.get("gee_weight", 1) for p in PRODUCTS.values()), default=1)
+# A product with gee_weight=5 can only run floor(10/5)=2 chunks at once.
+_max_weight = max((p.get("gee_weight", 1) for p in PRODUCTS.values()), default=1)
 _max_concurrent = _gee_slots // _max_weight
-_dynamic_window = max(1, _max_concurrent // _num_products)
-CHAIN_PARALLEL_WINDOW = int(config.get("chain_parallel_window", _dynamic_window))
+# Window = how many chunks ahead per band Snakemake is allowed to unlock.
+# Must be >= _max_concurrent so the GEE pool can stay fully saturated even when
+# only one product/band is running. Dividing by _num_products was wrong: it
+# collapsed to 1 once products finished, serialising the remaining work.
+# The gee resource constraint is the sole concurrency limiter — the window
+# just needs to be large enough not to artificially starve it.
+CHAIN_PARALLEL_WINDOW = int(config.get("chain_parallel_window", _max_concurrent))
 # Finest sensor resolution among all selected products — used to drive AOI simplification.
 # Preprocessing simplifies to max(resolution_tol, budget_tol); workers re-simplify
 # further if their product's native scale is coarser than the finest sensor.
@@ -97,13 +100,18 @@ rule all:
         get_final_targets()
 
 onsuccess:
-    from workflow.state import update_run_state
+    from workflow.state import update_run_state, write_run_warnings_summary
     update_run_state(
         run_yaml = f"{APP_DIR}/data/runs/{RUN_ID}/run.yaml",
         db_path  = f"{APP_DIR}/data/runs/run_state.duckdb",
         run_id   = RUN_ID,
         status   = "completed",
         message  = "Run completed successfully"
+    )
+    write_run_warnings_summary(
+        db_path   = f"{APP_DIR}/data/runs/run_state.duckdb",
+        run_id    = RUN_ID,
+        runs_dir  = f"{APP_DIR}/data/runs",
     )
 
 onerror:
@@ -228,7 +236,8 @@ rule merge_product_parquet:
         chunks = lambda wildcards: [
             f"{PARQUET_CHUNKS_DIR}/{wildcards.prod}/merged_{band}.parquet"
             for band in PRODUCTS[wildcards.prod]["bands"]
-        ]
+        ],
+        aoi = PREPPED_AOI
     output:
         merged = f"{RESULTS_DIR}/{{prod}}/{{prod}}_{{start}}_to_{{end}}.parquet"
     params:

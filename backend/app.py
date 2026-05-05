@@ -32,7 +32,7 @@ import pandas as pd
 import yaml
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from workflow.products import PRODUCT_REGISTRY
@@ -206,15 +206,26 @@ def _get_job_counts(run_id: str, meta: dict | None = None) -> dict:
         meta = _load_yaml(run_id)
     payload  = (meta or {}).get("payload") or {}
     products = payload.get("products") or {}
-    chunks_dir = RUNS_DIR / run_id / "intermediate" / "chunks"
+    chunks_dir  = RUNS_DIR / run_id / "intermediate" / "chunks"
+    results_dir = RUNS_DIR / run_id / "results"
 
     total = done = 0
+    by_product: dict = {}
     for prod, cfg in products.items():
+        # When a product finishes, Snakemake merges all chunk files into a final
+        # parquet and removes the intermediates. Count all chunks for that product
+        # as done based on the merged result so the progress bar doesn't reset.
+        prod_merged = (results_dir / prod).exists() and any((results_dir / prod).glob("*.parquet"))
+        prod_total = prod_done = 0
         for band in cfg.get("bands", []):
+            band_merged = (chunks_dir / prod / f"merged_{band}.parquet").exists()
             for chunk in cfg.get("time_chunks", []):
-                total += 1
-                if (chunks_dir / prod / f"{band}_{chunk}.parquet").exists():
-                    done += 1
+                prod_total += 1
+                if prod_merged or band_merged or (chunks_dir / prod / f"{band}_{chunk}.parquet").exists():
+                    prod_done += 1
+        total += prod_total
+        done  += prod_done
+        by_product[prod] = {"total": prod_total, "done": prod_done}
 
     # running/failed come from DuckDB, but are only trustworthy while Snakemake is
     # actively running.  When the process is gone the log handler can't update them,
@@ -240,7 +251,7 @@ def _get_job_counts(run_id: str, meta: dict | None = None) -> dict:
     running = db_counts.get("running", 0) if is_active else 0
     failed  = db_counts.get("failed",  0) if is_active else 0
     pending = max(0, total - done - running - failed)
-    return {"total": total, "done": done, "failed": failed, "running": running, "pending": pending, "shelved": shelved}
+    return {"total": total, "done": done, "failed": failed, "running": running, "pending": pending, "shelved": shelved, "by_product": by_product}
 
 def _initialise_jobs(run_id: str, payload: dict):
     """Pre-populate the jobs table (mirrors main.py initialise_jobs)."""
@@ -501,9 +512,111 @@ def _filter_snakemake_output(proc: subprocess.Popen, log_path: Path):
 
 def _launch_snakemake(run_id: str, payload: dict, log_path: Path) -> subprocess.Popen:
     """Start Snakemake for run_id. gee_concurrency is read from payload."""
+    import base64, shutil
     run_dir     = RUNS_DIR / run_id
     cfg_path    = CONFIG_DIR / f"config_{uuid.uuid4().hex[:8]}.yaml"
     cfg_path.write_text(yaml.safe_dump(payload, sort_keys=False))
+
+    # Determine which products are fully done (final parquet on disk).
+    results_dir = run_dir / "results"
+    done_products: set[str] = set()
+    if results_dir.exists():
+        for prod_dir in results_dir.iterdir():
+            if prod_dir.is_dir() and any(prod_dir.glob("*.parquet")):
+                done_products.add(prod_dir.name)
+
+    # Clear incomplete markers. For non-done products also delete the partial
+    # intermediate files (they may be corrupt from a killed job).
+    incomplete_dir = run_dir / ".snakemake" / "incomplete"
+    if incomplete_dir.exists():
+        for marker in incomplete_dir.iterdir():
+            try:
+                partial_path = Path(base64.b64decode(marker.name).decode("utf-8"))
+                if not any(prod in str(partial_path) for prod in done_products):
+                    partial_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        shutil.rmtree(incomplete_dir, ignore_errors=True)
+
+    # Fix stale intermediate files for done products that would otherwise trigger
+    # spurious mtime cascades.  Two cases arise when a run is killed mid-flight:
+    #
+    #  1. A temp() GeoJSON that extract_geojson_chunk was writing still exists on
+    #     disk with a fresh mtime.  Because convert_to_parquet completed (metadata
+    #     incomplete=False), the GeoJSON is no longer needed — delete it so it
+    #     cannot trigger convert again.
+    #
+    #  2. A chunk parquet was re-produced by a cascade run *after* merge_band_chunks
+    #     already finished (metadata endtime newer than the merged-band endtime).
+    #     Delete it and back-date its metadata endtime so merge_band_chunks is not
+    #     triggered again.
+    if done_products:
+        meta_root    = run_dir / ".snakemake" / "metadata"
+        geojson_root = run_dir / "intermediate" / "geojson"
+        chunk_root   = run_dir / "intermediate" / "chunks"
+
+        if meta_root.exists():
+            _meta_by_path: dict[str, Path] = {}
+            for _mf in meta_root.iterdir():
+                try:
+                    _p = base64.b64decode(_mf.name).decode("utf-8")
+                    _meta_by_path[_p.lower().replace("\\", "/")] = _mf
+                except Exception:
+                    pass
+
+            def _read_meta(p: Path) -> dict:
+                mf = _meta_by_path.get(str(p).lower().replace("\\", "/"))
+                if not mf:
+                    return {}
+                try:
+                    with open(mf) as _fh:
+                        return json.load(_fh)
+                except Exception:
+                    return {}
+
+            def _write_meta(p: Path, m: dict) -> None:
+                mf = _meta_by_path.get(str(p).lower().replace("\\", "/"))
+                if mf:
+                    try:
+                        with open(mf, "w") as _fh:
+                            json.dump(m, _fh)
+                    except Exception:
+                        pass
+
+            _chunk_re = re.compile(
+                r"^(?P<band>.+?)_(?P<chunk>\d{4}-\d{2}(?:_\d{4}-\d{2})?|\d{4})\.parquet$"
+            )
+
+            for _prod in done_products:
+                _ck_dir = chunk_root / _prod if chunk_root.exists() else None
+                _gj_dir = geojson_root / _prod if geojson_root.exists() else None
+
+                # Case 1: delete stale GeoJSON files whose chunk parquet is done.
+                if _gj_dir and _gj_dir.is_dir() and _ck_dir:
+                    for _gj in list(_gj_dir.glob("*.geojson")):
+                        _ck_path = _ck_dir / (_gj.stem + ".parquet")
+                        if _read_meta(_ck_path).get("incomplete") is False:
+                            _gj.unlink(missing_ok=True)
+
+                # Case 2: chunk parquet on disk with mtime newer than merged band.
+                if _ck_dir and _ck_dir.is_dir():
+                    for _ck in list(_ck_dir.glob("*.parquet")):
+                        if _ck.name.startswith("merged_"):
+                            continue
+                        _m = _chunk_re.match(_ck.name)
+                        if not _m:
+                            continue
+                        _merged_path = _ck_dir / f"merged_{_m.group('band')}.parquet"
+                        _merged_meta = _read_meta(_merged_path)
+                        if _merged_meta.get("incomplete") is not False:
+                            continue
+                        _merged_end = _merged_meta.get("endtime", 0)
+                        if _merged_end and _ck.stat().st_mtime > _merged_end:
+                            _ck.unlink(missing_ok=True)
+                            _ck_meta = _read_meta(_ck)
+                            if _ck_meta:
+                                _ck_meta["endtime"] = _merged_end - 1
+                                _write_meta(_ck, _ck_meta)
 
     try:
         extra = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {}
@@ -516,7 +629,7 @@ def _launch_snakemake(run_id: str, payload: dict, log_path: Path) -> subprocess.
     except Exception:
         pass
 
-    gee_concurrency = int(payload.get("gee_concurrency", DEFAULT_GEE_CONCURRENCY))
+    gee_concurrency = int(payload.get("gee_concurrency") or DEFAULT_GEE_CONCURRENCY)
     env = {
         **os.environ,
         "GOOGLE_APPLICATION_CREDENTIALS": str(GEE_KEY_PATH),
@@ -535,7 +648,8 @@ def _launch_snakemake(run_id: str, payload: dict, log_path: Path) -> subprocess.
         "--directory",           str(run_dir),
         "-j",                    "12",
         "--resources",           f"gee={gee_concurrency}",
-        "--rerun-incomplete",
+        "--rerun-triggers", "mtime",
+        "--quiet",               "rules",
         "--keep-going",
         "--log-handler-script",  str(LOG_HANDLER),
     ]
@@ -821,15 +935,24 @@ def _run_to_detail(run_id: str, meta: dict) -> dict:
 
     merged.sort(key=lambda e: e["ts"])
 
+    pid_file = RUNS_DIR / run_id / "logs" / "build_partial.pid"
+    partial_build_running = False
+    if pid_file.exists():
+        try:
+            partial_build_running = _is_pid_alive(int(pid_file.read_text().strip()))
+        except Exception:
+            pass
+
     return {
         **_run_to_summary(meta),
-        "pid":             meta.get("snakemake_pid"),
-        "run_dir":         str(RUNS_DIR / run_id),
-        "config":          payload,
-        "job_counts":        _get_job_counts(run_id, meta),
-        "events":            merged,
-        "gee_concurrency":   int(payload.get("gee_concurrency", DEFAULT_GEE_CONCURRENCY)),
-        "finished_products": _list_finished_products(run_id),
+        "pid":                  meta.get("snakemake_pid"),
+        "run_dir":              str(RUNS_DIR / run_id),
+        "config":               payload,
+        "job_counts":           _get_job_counts(run_id, meta),
+        "events":               merged,
+        "gee_concurrency":      int(payload.get("gee_concurrency") or DEFAULT_GEE_CONCURRENCY),
+        "finished_products":    _list_finished_products(run_id),
+        "partial_build_running": partial_build_running,
     }
 
 # ─── Routes: GEE key ─────────────────────────────────────────────────────────
@@ -1077,7 +1200,7 @@ def resume_run(run_id: str, body: ResumeRunRequest = ResumeRunRequest()):
     pid     = meta.get("snakemake_pid")
     payload = _fix_payload_paths(run_id, dict(meta.get("payload") or {}))
 
-    stored_concurrency = int(payload.get("gee_concurrency", DEFAULT_GEE_CONCURRENCY))
+    stored_concurrency = int(payload.get("gee_concurrency") or DEFAULT_GEE_CONCURRENCY)
     new_concurrency    = max(1, body.gee_concurrency) if body.gee_concurrency is not None else None
     changing           = new_concurrency is not None and new_concurrency != stored_concurrency
 
@@ -1087,7 +1210,8 @@ def resume_run(run_id: str, body: ResumeRunRequest = ResumeRunRequest()):
 
     if changing:
         # Kill the frozen process tree and restart with the new concurrency.
-        payload["gee_concurrency"] = new_concurrency
+        if new_concurrency is not None:
+            payload["gee_concurrency"] = new_concurrency
         if pid and _is_pid_alive(int(pid)):
             if sys.platform != "win32":
                 _signal_process_tree(int(pid), signal.SIGCONT)   # unfreeze first so SIGTERM is handled
@@ -1201,14 +1325,29 @@ def get_run_log(run_id: str, lines: int = 100):
 @app.post("/api/runs/{run_id}/partial")
 def trigger_partial(run_id: str):
     script   = APP_DIR / "scripts" / "build_partial.py"
+    pid_file = RUNS_DIR / run_id / "logs" / "build_partial.pid"
     log_path = RUNS_DIR / run_id / "logs" / "build_partial.log"
+
+    if pid_file.exists():
+        try:
+            if _is_pid_alive(int(pid_file.read_text().strip())):
+                return {"ok": False, "running": True}
+        except Exception:
+            pass
+
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # CREATE_NEW_PROCESS_GROUP isolates the child from Ctrl-C / CTRL_C_EVENT
+    # signals sent to the uvicorn process group on Windows, preventing a
+    # console interrupt from crashing background build jobs and the server.
+    _pgroup_flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     with open(log_path, "a") as log_fh:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, str(script), run_id, str(RUNS_DIR)],
             stdout=log_fh,
             stderr=log_fh,
+            creationflags=_pgroup_flag,
         )
+    pid_file.write_text(str(proc.pid))
     return {"ok": True}
 
 def _sanitize_filename(filename: str) -> str:
@@ -1314,17 +1453,10 @@ async def upload_aoi(run_id: str, file: UploadFile = File(...)):
 @app.get("/api/runs/{run_id}/download/{product}")
 def download_parquet(run_id: str, product: str):
     path = _find_product_parquet(run_id, product)
-    def stream():
-        with open(path, "rb") as f:
-            while chunk := f.read(65536):
-                yield chunk
-    return StreamingResponse(
-        stream(),
+    return FileResponse(
+        str(path),
         media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{path.name}"',
-            "Content-Length": str(path.stat().st_size),
-        },
+        headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
     )
 
 @app.get("/api/runs/{run_id}/download/{product}/csv")
@@ -1394,12 +1526,8 @@ def download_partial_parquet(run_id: str, product: str):
     if not files:
         raise HTTPException(404, "No partial checkout file yet")
     path = files[-1]
-    def stream():
-        with open(path, "rb") as f:
-            while chunk := f.read(65536):
-                yield chunk
-    return StreamingResponse(
-        stream(),
+    return FileResponse(
+        str(path),
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
     )

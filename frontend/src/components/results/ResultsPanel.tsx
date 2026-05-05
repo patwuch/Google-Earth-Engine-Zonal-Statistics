@@ -106,6 +106,8 @@ export default function ResultsPanel({ runId }: Props) {
 
   const partialMutation = useMutation({
     mutationFn: () => triggerPartialCheckout(runId!),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['run', runId] }),
+    onError: (e) => setPartialError((e as Error).message),
   })
 
   const retryMutation = useMutation({
@@ -247,28 +249,33 @@ export default function ResultsPanel({ runId }: Props) {
                   <div>
                     <p className="section-title flex items-center gap-1.5">Scheduled Datasets <HelpTooltip text="The satellite data products queued for this run, with their configured date ranges, bands, and processing statistics." /></p>
                     <div className="flex flex-col gap-2">
-                      {Object.entries(products).map(([id, cfg]) => (
-                        <div key={id} className="card p-3 space-y-1.5">
-                          <p className="text-xs font-medium text-gray-800">{id}</p>
-                          <p className="text-xs text-gray-500">
-                            {cfg.start_date} → {cfg.end_date}
-                            <span className="ml-2 text-gray-400">({cfg.cadence})</span>
-                          </p>
-                          <div className="flex flex-wrap gap-1">
-                            {(cfg.bands as string[]).map((b: string) => (
-                              <span key={b} className="text-xs px-2 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-200">{b}</span>
-                            ))}
+                      {Object.entries(products).map(([id, cfg]) => {
+                        const pc = run.job_counts.by_product?.[id]
+                        return (
+                          <div key={id} className="card p-3 space-y-1.5">
+                            <p className="text-xs font-medium text-gray-800">{id}</p>
+                            <p className="text-xs text-gray-500">
+                              {cfg.start_date} → {cfg.end_date}
+                              <span className="ml-2 text-gray-400">({cfg.cadence})</span>
+                            </p>
+                            <div className="flex flex-wrap gap-1">
+                              {(cfg.bands as string[]).map((b: string) => (
+                                <span key={b} className="text-xs px-2 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-200">{b}</span>
+                              ))}
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {(cfg.statistics as string[]).map((s: string) => (
+                                <span key={s} className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{s}</span>
+                              ))}
+                            </div>
+                            {pc ? (
+                              <p className="text-xs text-gray-400">{pc.done}/{pc.total} chunks</p>
+                            ) : cfg.time_chunks ? (
+                              <p className="text-xs text-gray-400">{(cfg.time_chunks as string[]).length} time chunks</p>
+                            ) : null}
                           </div>
-                          <div className="flex flex-wrap gap-1">
-                            {(cfg.statistics as string[]).map((s: string) => (
-                              <span key={s} className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{s}</span>
-                            ))}
-                          </div>
-                          {cfg.time_chunks && (
-                            <p className="text-xs text-gray-400">{(cfg.time_chunks as string[]).length} time chunks</p>
-                          )}
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 )
@@ -323,14 +330,22 @@ export default function ResultsPanel({ runId }: Props) {
                   const finishedSet = new Set(run.finished_products ?? [])
                   const hasInProgress = run.products.some((p) => !finishedSet.has(p))
                   if (!hasInProgress) return null
+                  const isBuilding = run.partial_build_running || partialMutation.isPending
                   return (
-                    <button
-                      className="btn-secondary w-full"
-                      onClick={() => partialMutation.mutate()}
-                      disabled={partialMutation.isPending}
-                    >
-                      {partialMutation.isPending ? 'Building…' : 'Build Partial Checkout'}
-                    </button>
+                    <>
+                      <button
+                        className="btn-secondary w-full"
+                        onClick={() => { setPartialError(null); partialMutation.mutate() }}
+                        disabled={isBuilding}
+                      >
+                        {isBuilding ? 'Building…' : 'Build Partial Checkout'}
+                      </button>
+                      {partialMutation.isError && (
+                        <p className="text-xs text-red-600 mt-1">
+                          {(partialMutation.error as Error)?.message ?? 'Build failed'}
+                        </p>
+                      )}
+                    </>
                   )
                 })()}
 
@@ -455,11 +470,13 @@ export default function ResultsPanel({ runId }: Props) {
                         const colour =
                           ev.level === 'job_error' || ev.level === 'error'
                             ? 'text-red-600'
-                            : ev.level === 'job_shelved'
+                            : ev.level === 'job_shelved' || ev.level === 'empty_chunk'
                             ? 'text-amber-600'
-                            : ev.level === 'job_done'
+                            : ev.level === 'run_summary'
+                            ? 'text-amber-700 font-medium'
+                            : ev.level === 'job_done' || ev.level === 'job_finished' || ev.level === 'partial_done'
                             ? 'text-green-600'
-                            : ev.level === 'job_start'
+                            : ev.level === 'job_start' || ev.level === 'partial_start'
                             ? 'text-brand-600'
                             : 'text-gray-700'
                         return (

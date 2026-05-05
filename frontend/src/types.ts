@@ -25,6 +25,7 @@ export interface RunDetail extends RunSummary {
   events: RunEvent[]
   gee_concurrency: number
   finished_products: string[]
+  partial_build_running: boolean
 }
 
 export interface JobCounts {
@@ -34,6 +35,7 @@ export interface JobCounts {
   running: number
   pending: number
   shelved: number
+  by_product: Record<string, { total: number; done: number }>
 }
 
 export interface RunEvent {
