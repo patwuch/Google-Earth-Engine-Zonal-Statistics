@@ -127,13 +127,23 @@ def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
                     raise
                 time.sleep(1.0)
 
-        # Write to Parquet with compression
+        # Write to Parquet with compression.
+        # Retry on "could not move file": Windows AV/indexer can open DuckDB's
+        # .tmp file mid-write, blocking the internal rename to the final path.
         log_progress(f"Writing GeoParquet: {parquet_path}", log_file)
-        conn.execute(f"""
-            COPY {export_table}
-            TO '{parquet_path_sql}'
-            (FORMAT PARQUET, COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000)
-        """)
+        for _attempt in range(5):
+            try:
+                conn.execute(f"""
+                    COPY {export_table}
+                    TO '{parquet_path_sql}'
+                    (FORMAT PARQUET, COMPRESSION 'ZSTD', ROW_GROUP_SIZE 100000)
+                """)
+                break
+            except Exception as _e:
+                if "could not move" not in str(_e).lower() or _attempt == 4:
+                    raise
+                log_progress(f"Retrying write (attempt {_attempt + 2}/5): {_e}", log_file)
+                time.sleep(1.0)
         
         # Verify output
         if not os.path.exists(parquet_path):
