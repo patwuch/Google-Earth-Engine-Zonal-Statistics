@@ -5,6 +5,7 @@ Preserves geometry and adds spatial indexing.
 import duckdb
 import os
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -112,6 +113,19 @@ def convert_geojson_to_parquet(geojson_path, parquet_path, log_file=None):
                 f"CREATE TABLE deduped AS SELECT {', '.join(select_parts)} FROM geojson_data"
             )
         export_table = "deduped"
+
+        # Remove any existing output file so DuckDB's internal temp-file rename
+        # doesn't fail on Windows when the target already exists.
+        # Retry on PermissionError — antivirus/indexer locks are typically transient.
+        for _attempt in range(5):
+            try:
+                if os.path.exists(parquet_path):
+                    os.remove(parquet_path)
+                break
+            except PermissionError:
+                if _attempt == 4:
+                    raise
+                time.sleep(1.0)
 
         # Write to Parquet with compression
         log_progress(f"Writing GeoParquet: {parquet_path}", log_file)

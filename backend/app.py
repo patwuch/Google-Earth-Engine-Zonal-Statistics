@@ -39,6 +39,21 @@ from workflow.products import PRODUCT_REGISTRY
 from workflow.time_chunks import get_time_chunks
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _force_unlink(path: Path, retries: int = 5, delay: float = 1.0) -> bool:
+    """Delete a file, retrying on PermissionError for transient Windows locks.
+    Returns True if deleted, False if all attempts failed."""
+    for attempt in range(retries):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except PermissionError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+    return False
+
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 _docker_data = Path("/app/data")
@@ -533,10 +548,15 @@ def _launch_snakemake(run_id: str, payload: dict, log_path: Path) -> subprocess.
             try:
                 partial_path = Path(base64.b64decode(marker.name).decode("utf-8"))
                 if not any(prod in str(partial_path) for prod in done_products):
-                    partial_path.unlink(missing_ok=True)
+                    if not _force_unlink(partial_path):
+                        continue  # lock held after all retries — leave marker for Snakemake
+                marker.unlink(missing_ok=True)
             except Exception:
-                pass
-        shutil.rmtree(incomplete_dir, ignore_errors=True)
+                pass  # leave marker intact — Snakemake will re-run this output on next resume
+        try:
+            incomplete_dir.rmdir()  # only succeeds if all markers were cleared
+        except OSError:
+            pass
 
     # Fix stale intermediate files for done products that would otherwise trigger
     # spurious mtime cascades.  Two cases arise when a run is killed mid-flight:
@@ -648,8 +668,8 @@ def _launch_snakemake(run_id: str, payload: dict, log_path: Path) -> subprocess.
         "--directory",           str(run_dir),
         "-j",                    "12",
         "--resources",           f"gee={gee_concurrency}",
-        "--rerun-triggers", "mtime",
-        "--quiet",               "rules",
+        "--rerun-triggers", "mtime",            # set to only mtime so when config is updated from GEE concurrency budget, finished products dont get rerun
+        "--quiet",               "rules",   # we already have a logging script and snakemake default log is very messy
         "--keep-going",
         "--log-handler-script",  str(LOG_HANDLER),
     ]
