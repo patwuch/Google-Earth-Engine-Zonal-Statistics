@@ -43,7 +43,7 @@ cmd = "powershell -NoProfile -Command \"Remove-Item -Recurse -Force -ErrorAction
 cwd = "frontend"
 
 [tasks.npm-install]
-cmd = "npm install && npm audit fix"
+cmd = "npm install"
 cwd = "frontend"
 
 [tasks.build-frontend]
