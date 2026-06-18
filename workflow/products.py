@@ -4,7 +4,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
     "CHIRPS": {
         "ee_collection": "UCSB-CHG/CHIRPS/DAILY",
         "min_date": "1981-01-01",
-        "max_date": "2026-02-28",
+        "max_date": "2026-05-31",
         "scale": 5566,
         "cadence": "daily",
         "categorical": False,
@@ -18,7 +18,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
     "ERA5_LAND": {
         "ee_collection": "ECMWF/ERA5_LAND/DAILY_AGGR",
         "min_date": "1950-01-01",
-        "max_date": "2026-02-28",
+        "max_date": "2026-06-09",
         "scale": 11132,
         "cadence": "daily",
         "categorical": False,
@@ -42,7 +42,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
     "MODIS_LST": {
         "ee_collection": "MODIS/061/MOD11A2",
         "min_date": "2000-02-18",
-        "max_date": "2026-02-10",
+        "max_date": "2026-06-02",
         "scale": 1000,
         "cadence": "composite",
         "categorical": False,
@@ -92,7 +92,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
     "MODIS_NDVI_EVI": {
         "ee_collection": "MODIS/061/MOD13Q1",
         "min_date": "2000-02-18",
-        "max_date": "2026-02-02",
+        "max_date": "2026-05-25",
         "scale": 250,
         "cadence": "composite",
         "categorical": False,
@@ -257,7 +257,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                 # LC08 first operational data: 2013-04-11.
                 "id":               "LANDSAT/LC08/C02/T1_L2",
                 "date_start":       "2013-04-11",
-                "date_end":         "2025-12-31",
+                "date_end":         "2026-06-10",
                 "swir_band":        "SR_B6",
                 "nir_band":         "SR_B5",
                 "reflectance_scale":  0.0000275,
@@ -274,7 +274,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
             },
         ],
         "min_date": "1984-01-01",
-        "max_date": "2025-12-31",
+        "max_date": "2026-06-10",
         "scale": 30,
         "cadence": "seasonal",
         "categorical": False,
@@ -298,7 +298,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                 # Terra — MOD09GA daily surface reflectance, available from 2000-02-24.
                 "id":         "MODIS/061/MOD09GA",
                 "date_start": "2000-02-24",
-                "date_end":   "2025-12-31",
+                "date_end":   "2026-06-14",
                 "swir_band":  "sur_refl_b06",
                 "nir_band":   "sur_refl_b02",
                 # MOD09GA state_1km bits 0–1: 00=clear, 01=cloudy, 10=mixed, 11=not set.
@@ -315,7 +315,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
                 # Merged with Terra to increase observation density and reduce cloud gaps.
                 "id":         "MODIS/061/MYD09GA",
                 "date_start": "2002-07-04",
-                "date_end":   "2025-12-31",
+                "date_end":   "2026-06-14",
                 "swir_band":  "sur_refl_b06",
                 "nir_band":   "sur_refl_b02",
                 "qa_mask": {
@@ -327,7 +327,7 @@ PRODUCT_REGISTRY: dict[str, dict] = {
             },
         ],
         "min_date": "2000-02-24",
-        "max_date": "2025-12-31",
+        "max_date": "2026-06-14",
         "scale": 500,
         "cadence": "seasonal",
         "categorical": False,
