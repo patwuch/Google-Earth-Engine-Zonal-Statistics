@@ -186,6 +186,28 @@ PRODUCT_REGISTRY: dict[str, dict] = {
         "description": "Dynamic World v1 landcover classification (10m resolution, daily), adjust in 'products.py' if too complex",
         "resolution_m": 10
         },
+    "Dynamic World V1 - Border Zones": {
+        "ee_collection": "GOOGLE/DYNAMICWORLD/V1",
+        "min_date": "2015-06-27",
+        "max_date": "2026-04-27",
+        "scale": 10,
+        "cadence": "weekly",
+        "categorical": True,
+        "normalize_histogram": True,
+        # Preprocessed as shared-border corridors between touching polygons
+        # (scripts/preprocess_borders.py) instead of the original polygons —
+        # one row per touching pair, not per polygon.
+        "aoi_mode": "border_pairs",
+        "content": {
+            "label": {"stats": ["histogram"], "default_stats": ["histogram"]}},
+        "label": "Dynamic World v1 Border-Zone Land Use",
+        "description": (
+            "Dynamic World v1 landcover classification (10m resolution) sampled over a "
+            "~20m corridor along the shared border between touching polygons, one entry "
+            "per touching pair per week."
+        ),
+        "resolution_m": 10
+        },
     "WorldPop": {
         "ee_collection": "WorldPop/GP/100m/pop",
         "min_date": "2000-01-01",

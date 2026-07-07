@@ -58,6 +58,13 @@ PARQUET_CHUNKS_DIR = f"{APP_DIR}/data/runs/{RUN_ID}/intermediate/chunks"
 RESULTS_DIR        = f"{APP_DIR}/data/runs/{RUN_ID}/results"
 LOGS_DIR           = f"{APP_DIR}/data/runs/{RUN_ID}/logs"
 PREPPED_AOI        = f"{APP_DIR}/data/runs/{RUN_ID}/intermediate/aoi_prepped.parquet"
+PREPPED_BORDERS    = f"{APP_DIR}/data/runs/{RUN_ID}/intermediate/aoi_prepped_borders.parquet"
+
+
+def _aoi_for_product(prod):
+    """Border-pair products (aoi_mode='border_pairs') sample corridors along
+    shared boundaries instead of the original polygons."""
+    return PREPPED_BORDERS if PRODUCTS[prod].get("aoi_mode") == "border_pairs" else PREPPED_AOI
 
 
 def get_previous_chunk_output(wildcards):
@@ -142,6 +149,25 @@ rule preprocess_aoi:
         "scripts/preprocess_aoi.py"
 
 
+rule preprocess_borders:
+    """
+    Pre-process the AOI into shared-border corridors for border-pair products
+    (aoi_mode='border_pairs'). Runs on the raw shapefile — corridor geometry
+    must stay at native precision regardless of the simplification tolerance
+    other products in the same run apply to aoi_prepped.parquet.
+    """
+    input:
+        shp = SHP
+    output:
+        aoi = PREPPED_BORDERS
+    params:
+        id_column = ID_COLUMN
+    log:
+        f"{LOGS_DIR}/preprocess_borders.log"
+    script:
+        "scripts/preprocess_borders.py"
+
+
 rule extract_geojson_chunk:
     """
     Step 1: Extract zonal statistics from GEE as GeoJSON.
@@ -149,7 +175,7 @@ rule extract_geojson_chunk:
     Preserves geometry for spatial analysis.
     """
     input:
-        aoi  = PREPPED_AOI,
+        aoi  = lambda wildcards: _aoi_for_product(wildcards.prod),
         prev = get_previous_chunk_output
     output:
         geojson = temp(f"{GEOJSON_CHUNKS_DIR}/{{prod}}/{{band}}_{{time_chunk}}.geojson")
@@ -237,7 +263,7 @@ rule merge_product_parquet:
             f"{PARQUET_CHUNKS_DIR}/{wildcards.prod}/merged_{band}.parquet"
             for band in PRODUCTS[wildcards.prod]["bands"]
         ],
-        aoi = PREPPED_AOI
+        aoi = lambda wildcards: _aoi_for_product(wildcards.prod)
     output:
         merged = f"{RESULTS_DIR}/{{prod}}/{{prod}}_{{start}}_to_{{end}}.parquet"
     params:

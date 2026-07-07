@@ -334,3 +334,45 @@ def build_daily_histogram_stats(collection, regions, scale, band, tile_scale=1):
             tileScale=tile_scale,
         ).map(lambda f: f.set("Date", date_str))
     return collection.map(reduce_image).flatten()
+
+
+def build_weekly_histogram_stats(collection, regions, scale, band, start, end, tile_scale=1):
+    """
+    Compute per-class pixel counts per region per ISO week (Monday-aligned)
+    covering [start, end). One row per region per week, tagged with a 'Date'
+    property set to the week's start date.
+
+    Mirrors build_daily_histogram_stats's output contract (region + Date +
+    {band}-named histogram property) but collapses each week's images into a
+    single mosaic first — appropriate for reducing GEE load on daily-revisit
+    categorical products (e.g. Dynamic World) where per-day granularity isn't
+    needed.
+
+    Weeks are enumerated in Python (small, bounded count per chunk) and their
+    FeatureCollections merged, the same loop-then-merge shape already used in
+    build_multi_ndbi_collection for per-sensor collections.
+    """
+    start_dt = datetime.strptime(start, "%Y-%m-%d")
+    end_dt   = datetime.strptime(end, "%Y-%m-%d")
+
+    # Align the first week to the Monday on/before start.
+    week_start = start_dt - timedelta(days=start_dt.weekday())
+
+    result = None
+    while week_start < end_dt:
+        week_end = week_start + timedelta(days=7)
+        week_start_str = week_start.strftime("%Y-%m-%d")
+        week_end_str   = week_end.strftime("%Y-%m-%d")
+
+        image = collection.filterDate(week_start_str, week_end_str).mosaic().select([band])
+        fc = image.reduceRegions(
+            collection=regions,
+            reducer=ee.Reducer.frequencyHistogram(),
+            scale=scale,
+            tileScale=tile_scale,
+        ).map(lambda f, d=week_start_str: f.set("Date", d))
+
+        result = fc if result is None else result.merge(fc)
+        week_start = week_end
+
+    return result

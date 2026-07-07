@@ -1117,6 +1117,7 @@ def submit_run(body: SubmitRunRequest):
             "time_chunks":      time_chunks,
             "gee_weight":       info.get("gee_weight", 1),
             "tile_scale":       info.get("tile_scale", 1),
+            "aoi_mode":         info.get("aoi_mode", "polygon"),
             # Per-band QA bit-mask configs (None for bands/products with no masking).
             "band_masks":       {
                 band: info.get("content", {}).get(band, {}).get("qa_mask")

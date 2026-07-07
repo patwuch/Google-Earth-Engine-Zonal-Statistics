@@ -19,7 +19,7 @@ def get_time_chunks(start_str: str, end_str: str, cadence: str) -> list[str]:
     """Used by app.py — derives chunks from explicit start/end/cadence."""
     if cadence == "annual":
         return _year_list(start_str, end_str)
-    if cadence == "daily":
+    if cadence in ("daily", "weekly"):
         return _month_list(start_str, end_str)
     if cadence == "seasonal":
         return _seasonal_chunks(start_str, end_str)

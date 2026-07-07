@@ -28,12 +28,14 @@ from workflow.gee_ops import (
     build_annual_stats,
     build_histogram_stats,
     build_daily_histogram_stats,
+    build_weekly_histogram_stats,
 )
 import geopandas as gpd
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 import threading
 import traceback
+import time
 
 # Prefer Snakemake job log if configured
 try:
@@ -42,10 +44,14 @@ except NameError:
     LOG_FILE = "worker_debug.log"
 
 def initialize_earth_engine():
-    """Initialize Earth Engine with service account or default credentials"""
+    """Initialize Earth Engine with service account or default credentials.
+    Retries on transient network/DNS errors so a brief connectivity blip
+    does not burn through all Snakemake-level retries immediately.
+    """
     credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     service_account = os.getenv("EE_SERVICE_ACCOUNT")
 
+    credentials = None
     if credentials_path and os.path.exists(credentials_path):
         if not service_account:
             try:
@@ -57,10 +63,28 @@ def initialize_earth_engine():
 
         if service_account:
             credentials = ee.ServiceAccountCredentials(service_account, credentials_path)
-            ee.Initialize(credentials)
-            return
 
-    ee.Initialize()
+    max_attempts = 4
+    backoff = 30  # seconds between attempts
+    last_exc = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if credentials is not None:
+                ee.Initialize(credentials)
+            else:
+                ee.Initialize()
+            return
+        except (ConnectionError, OSError) as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                log_progress(
+                    f"EE init failed (attempt {attempt}/{max_attempts}, "
+                    f"network error: {exc}) — retrying in {backoff}s"
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 120)
+            else:
+                raise
 
 def _count_coords(geom):
     """Count all coordinates in a geometry, including holes and multi-part components."""
@@ -382,6 +406,12 @@ def export_to_geojson(image, regions, scale, out_geojson, max_retries=5, prop_re
                 raise
 
 try:
+    # Truncate the log at the start of each attempt so retries don't leave
+    # confusing stale error messages from previous attempts at the top.
+    if os.path.dirname(LOG_FILE):
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    open(LOG_FILE, "w").close()
+
     log_progress("Starting GeoJSON worker")
     initialize_earth_engine()
     log_progress("Earth Engine initialized")
@@ -539,6 +569,8 @@ try:
         if categorical:
             if cadence in ("daily", "composite"):
                 stats_fc = build_daily_histogram_stats(collection, regions_fc, scale, band, tile_scale)
+            elif cadence == "weekly":
+                stats_fc = build_weekly_histogram_stats(collection, regions_fc, scale, band, start, end, tile_scale)
             else:
                 stats_fc = build_histogram_stats(collection, regions_fc, scale, band)
             # GEE names the histogram output property after the band; rename to {band}_histogram
